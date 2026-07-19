@@ -1,0 +1,9 @@
+{
+  "health": "/health",
+  "base_url": "http://localhost:11434/v1",
+  "api_key": "",
+  "endpoints": {
+    "chat": "/chat/completions"
+  },
+  "models": ["gemma-4"]
+}

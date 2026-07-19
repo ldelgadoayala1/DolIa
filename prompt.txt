@@ -1,0 +1,9 @@
+BD Plataforma Social Listening IA
+│
+├── Nivel 1 - Core
+├── Nivel 2 - Adquisición de datos
+├── Nivel 3 - Procesamiento IA
+├── Nivel 4 - Conocimiento
+├── Nivel 5 - Analítica
+├── Nivel 6 - Seguridad
+└── Nivel 7 - Optimización
