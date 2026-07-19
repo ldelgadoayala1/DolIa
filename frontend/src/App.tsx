@@ -1,8 +1,10 @@
 import { useEffect, useMemo, useState } from "react";
+import WordCloud from "./components/WordCloud";
+import GraphView from "./components/GraphView";
 
 type WordItem = { word: string; weight: number };
 type GraphNode = { id: string; label: string };
-type GraphEdge = { id: string; source: string; target: string; weight: number };
+type GraphEdge = { id?: string; source: string; target: string; weight?: number };
 
 type FinalResult = {
   summary?: string;
@@ -23,7 +25,9 @@ export default function App() {
 
   const [result, setResult] = useState<FinalResult | null>(null);
 
-  const apiBase = ""; // desde docker, asumimos mismo host/puertos proxy no; cambiamos si necesitas
+  // Como estabas usando localhost:8000 hardcodeado, mantenemos igual para que no rompa nada.
+  const apiSearchUrl = "http://localhost:8000/search";
+  const apiEventsBase = "http://localhost:8000/events";
 
   const normalizedSources = useMemo(() => sources, [sources]);
 
@@ -34,7 +38,7 @@ export default function App() {
     setStage("");
     setStatus("Enviando búsqueda...");
 
-    const resp = await fetch(`http://localhost:8000/search`, {
+    const resp = await fetch(apiSearchUrl, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({
@@ -60,7 +64,7 @@ export default function App() {
   useEffect(() => {
     if (!jobId) return;
 
-    const url = `http://localhost:8000/events?job_id=${encodeURIComponent(jobId)}`;
+    const url = `${apiEventsBase}?job_id=${encodeURIComponent(jobId)}`;
     const es = new EventSource(url);
 
     es.onmessage = (ev) => {
@@ -108,7 +112,7 @@ export default function App() {
 
   return (
     <div style={{ fontFamily: "sans-serif", padding: 24, maxWidth: 1100, margin: "0 auto" }}>
-      <h1>WebScrappingUNAB (MVP SSE)</h1>
+      <h1>WebScrappingUNAB (MVP SSE + Opción A)</h1>
 
       <div style={{ display: "flex", gap: 16, alignItems: "flex-start" }}>
         {/* Sidebar */}
@@ -213,55 +217,9 @@ export default function App() {
               <>
                 {result.summary && <p><b>Resumen:</b> {result.summary}</p>}
 
-                {/* Wordcloud (MVP HTML) */}
-                <h4>Nube de palabras (MVP)</h4>
-                <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
-                  {wordcloud.map((w) => (
-                    <span
-                      key={w.word}
-                      style={{
-                        fontSize: `${Math.max(12, Math.min(42, 10 + w.weight))}px`,
-                        background: "#eef2ff",
-                        padding: "4px 10px",
-                        borderRadius: 999,
-                      }}
-                    >
-                      {w.word}
-                    </span>
-                  ))}
-                </div>
-
-                {/* Graph (MVP HTML) */}
-                <h4 style={{ marginTop: 18 }}>Grafo (MVP)</h4>
-                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12 }}>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 8 }}>Nodes</div>
-                    <pre
-                      style={{
-                        background: "#f8fafc",
-                        padding: 12,
-                        borderRadius: 8,
-                        maxHeight: 240,
-                        overflow: "auto",
-                      }}
-                    >
-                      {JSON.stringify(graph?.nodes ?? [], null, 2)}
-                    </pre>
-                  </div>
-                  <div>
-                    <div style={{ fontWeight: 600, marginBottom: 8 }}>Edges</div>
-                    <pre
-                      style={{
-                        background: "#f8fafc",
-                        padding: 12,
-                        borderRadius: 8,
-                        maxHeight: 240,
-                        overflow: "auto",
-                      }}
-                    >
-                      {JSON.stringify(graph?.edges ?? [], null, 2)}
-                    </pre>
-                  </div>
+                <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 12, alignItems: "start" }}>
+                  <WordCloud wordcloud={wordcloud} />
+                  <GraphView graph={graph} height={520} />
                 </div>
               </>
             )}
@@ -269,7 +227,16 @@ export default function App() {
 
           <div style={{ marginTop: 16, border: "1px solid #ddd", padding: 16, borderRadius: 8 }}>
             <h3>Eventos (debug)</h3>
-            <pre style={{ background: "#111827", color: "#e5e7eb", padding: 12, borderRadius: 8, overflow: "auto", maxHeight: 220 }}>
+            <pre
+              style={{
+                background: "#111827",
+                color: "#e5e7eb",
+                padding: 12,
+                borderRadius: 8,
+                overflow: "auto",
+                maxHeight: 220,
+              }}
+            >
               {JSON.stringify(events, null, 2)}
             </pre>
           </div>
