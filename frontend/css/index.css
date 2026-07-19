@@ -1,0 +1,102 @@
+/* ============================================
+   DolIA × UNAB — Reset + Variables Globales
+   ============================================ */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap');
+
+/* ── Variables de color UNAB ── */
+:root {
+  /* Colores institucionales */
+  --unab-blue-dark:    #1B3A6B;
+  --unab-blue-mid:     #2E5FA3;
+  --unab-blue-light:   #4A7FC1;
+  --unab-red:          #C8102E;
+  --unab-red-dark:     #A50D25;
+  --unab-red-light:    #E8314E;
+
+  /* Neutros */
+  --white:             #FFFFFF;
+  --gray-50:           #F8FAFC;
+  --gray-100:          #F1F5F9;
+  --gray-200:          #E2E8F0;
+  --gray-300:          #CBD5E1;
+  --gray-400:          #94A3B8;
+  --gray-500:          #64748B;
+  --gray-600:          #475569;
+  --gray-700:          #334155;
+  --gray-800:          #1E293B;
+  --gray-900:          #0F172A;
+
+  /* Semánticos */
+  --bg-primary:        #F0F4F8;
+  --bg-secondary:      #FFFFFF;
+  --bg-card:           #FFFFFF;
+  --text-primary:      #1E293B;
+  --text-secondary:    #475569;
+  --text-muted:        #94A3B8;
+  --border-color:      #E2E8F0;
+  --shadow-sm:         0 1px 3px rgba(27,58,107,0.08), 0 1px 2px rgba(27,58,107,0.04);
+  --shadow-md:         0 4px 6px rgba(27,58,107,0.07), 0 2px 4px rgba(27,58,107,0.05);
+  --shadow-lg:         0 10px 15px rgba(27,58,107,0.10), 0 4px 6px rgba(27,58,107,0.05);
+  --shadow-xl:         0 20px 25px rgba(27,58,107,0.12), 0 8px 10px rgba(27,58,107,0.06);
+
+  /* Progreso */
+  --progress-bg:       #E2E8F0;
+  --progress-fill:     linear-gradient(90deg, var(--unab-blue-mid), var(--unab-blue-light));
+
+  /* Radios */
+  --radius-sm:         6px;
+  --radius-md:         10px;
+  --radius-lg:         16px;
+  --radius-xl:         24px;
+  --radius-full:       9999px;
+
+  /* Transiciones */
+  --transition-fast:   150ms ease;
+  --transition-base:   250ms ease;
+  --transition-slow:   400ms ease;
+}
+
+/* ── Reset ── */
+*, *::before, *::after {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  font-size: 16px;
+  scroll-behavior: smooth;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+body {
+  font-family: 'Inter', system-ui, -apple-system, sans-serif;
+  background-color: var(--bg-primary);
+  color: var(--text-primary);
+  line-height: 1.6;
+  min-height: 100vh;
+}
+
+#root {
+  min-height: 100vh;
+  display: flex;
+  flex-direction: column;
+}
+
+/* ── Scrollbar personalizada ── */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--gray-100);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--unab-blue-mid);
+  border-radius: var(--radius-full);
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--unab-blue-dark);
+}
