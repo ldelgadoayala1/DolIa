@@ -1,126 +1,161 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+// frontend/src/components/WordCloud.tsx
+import { useEffect, useRef } from "react";
+import * as d3 from "d3";
 import cloud from "d3-cloud";
 
-export type WordItem = { word: string; weight: number };
+interface Word {
+  text: string;
+  value: number;
+}
 
-type Props = {
-  wordcloud?: WordItem[];
-  width?: number;
-  height?: number;
-};
+interface Props {
+  words: Word[];
+}
 
-export default function WordCloud({
-  wordcloud = [],
-  width = 700,
-  height = 320,
-}: Props) {
-  const canvasRef = useRef<HTMLCanvasElement | null>(null);
-  const [renderSeed, setRenderSeed] = useState(0);
+// Paleta de azules + acento rojo UNAB (como la referencia)
+const COLOR_PALETTE = [
+  "#1B3A6B", // azul oscuro UNAB
+  "#2E5FA3", // azul medio UNAB
+  "#4A90D9", // azul claro
+  "#6FB3E0", // azul cielo
+  "#1A7FC1", // azul brillante
+  "#0D5C8F", // azul profundo
+  "#3B82C4", // azul intermedio
+  "#C8102E", // rojo UNAB (acento)
+  "#2196F3", // azul material
+  "#1565C0", // azul intenso
+];
 
-  const sorted = useMemo(() => {
-    if (!wordcloud) return [];
-    return [...wordcloud]
-      .filter((w) => w?.word && typeof w.weight === "number")
-      .sort((a, b) => b.weight - a.weight);
-  }, [wordcloud]);
-
-  const hasData = sorted.length > 0;
-
-  useEffect(() => {
-    setRenderSeed((s) => s + 1);
-  }, [sorted]);
+export default function WordCloud({ words }: Props) {
+  const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
+    if (!words || words.length === 0 || !svgRef.current) return;
 
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
+    const container = svgRef.current.parentElement;
+    const width = container?.clientWidth || 700;
+    const height = 420;
 
-    ctx.clearRect(0, 0, width, height);
+    // Limpiar SVG anterior
+    d3.select(svgRef.current).selectAll("*").remove();
 
-    if (!hasData) return;
+    // Escala de tamaño de fuente
+    const maxVal = Math.max(...words.map((w) => w.value));
+    const minVal = Math.min(...words.map((w) => w.value));
 
-    const maxWords = 60; // legibilidad
-    const words = sorted.slice(0, maxWords);
+    const fontSizeScale = d3
+      .scaleLinear()
+      .domain([minVal, maxVal])
+      .range([14, 80]);
 
-    const maxW = Math.max(...words.map((d) => d.weight), 1);
-    const minFont = 12;
-    const maxFont = 46;
+    // Escala de color por frecuencia
+    const colorScale = d3
+      .scaleQuantize<string>()
+      .domain([minVal, maxVal])
+      .range(COLOR_PALETTE);
 
-    const fontScale = (w: number) => {
-      const t = w / maxW;
-      return minFont + t * (maxFont - minFont);
-    };
-
-    const layout = cloud()
-      .canvas(canvas as any)
+    // Generar layout de nube
+    cloud()
       .size([width, height])
-      .words(words.map((d) => ({ text: d.word, size: fontScale(d.weight) })))
+      .words(
+        words.map((w) => ({
+          text: w.text,
+          size: fontSizeScale(w.value),
+          value: w.value,
+        }))
+      )
       .padding(4)
-      .rotate(() => (Math.random() > 0.82 ? 90 : 0))
-      .font("sans-serif")
+      .rotate(() => {
+        // Mayoría horizontal, algunos rotados como la referencia
+        const angles = [0, 0, 0, 90, -90];
+        return angles[Math.floor(Math.random() * angles.length)];
+      })
+      .font("'Segoe UI', 'Arial', sans-serif")
       .fontSize((d: any) => d.size)
-      .on("end", (items: any[]) => {
-        ctx.clearRect(0, 0, width, height);
+      .on("end", draw)
+      .start();
 
-        const cx = width / 2;
-        const cy = height / 2;
+    function draw(computedWords: any[]) {
+      const svg = d3.select(svgRef.current);
 
-        items.forEach((d) => {
-          ctx.save();
-          ctx.translate(cx + d.x, cy + d.y);
-          ctx.rotate((d.rotate * Math.PI) / 180);
+      svg
+        .attr("width", width)
+        .attr("height", height)
+        .style("background", "transparent");
 
-          const alpha = Math.min(1, Math.max(0.35, d.size / maxFont));
-          ctx.fillStyle = `rgba(52, 211, 153, ${alpha})`;
+      const g = svg
+        .append("g")
+        .attr("transform", `translate(${width / 2},${height / 2})`);
 
-          ctx.textAlign = "center";
-          ctx.textBaseline = "middle";
-          ctx.font = `600 ${d.size}px sans-serif`;
+      g.selectAll("text")
+        .data(computedWords)
+        .enter()
+        .append("text")
+        .style("font-family", "'Segoe UI', 'Arial', sans-serif")
+        .style("font-weight", (d: any) => (d.size > 40 ? "800" : d.size > 25 ? "700" : "500"))
+        .style("fill", (d: any) => colorScale(d.value))
+        .style("cursor", "pointer")
+        .style("opacity", 0)
+        .attr("text-anchor", "middle")
+        .attr("transform", (d: any) => `translate(${d.x},${d.y}) rotate(${d.rotate})`)
+        .attr("font-size", (d: any) => `${d.size}px`)
+        .text((d: any) => d.text)
+        // Animación de entrada
+        .transition()
+        .duration(600)
+        .delay((_, i) => i * 20)
+        .style("opacity", 1)
+        // Hover interactivo
+        .selection()
+        .on("mouseover", function (event: any, d: any) {
+          d3.select(this)
+            .transition()
+            .duration(200)
+            .style("opacity", 0.75)
+            .attr("font-size", `${d.size * 1.15}px`);
 
-          ctx.fillText(d.text, 0, 0);
-          ctx.restore();
+          // Tooltip
+          tooltip
+            .style("display", "block")
+            .html(`<strong>${d.text}</strong><br/>Frecuencia: ${d.value}`)
+            .style("left", `${event.offsetX + 12}px`)
+            .style("top", `${event.offsetY - 28}px`);
+        })
+        .on("mouseout", function (_, d: any) {
+          d3.select(this)
+            .transition()
+            .duration(200)
+            .style("opacity", 1)
+            .attr("font-size", `${d.size}px`);
+
+          tooltip.style("display", "none");
         });
-      });
+    }
 
-    // // variación controlada
-    // layout.randomSource(() => {
-    //   let x = (renderSeed * 99991 + 12345) >>> 0;
-    //   x = (x ^ (x << 13)) >>> 0;
-    //   return (x % 1000) / 1000;
-    // });
-
-    layout.start();
-
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [sorted, width, height, hasData, renderSeed]);
+    // Tooltip DOM
+    const parentEl = svgRef.current.parentElement!;
+    let tooltip = d3.select(parentEl).select<HTMLDivElement>(".wc-tooltip");
+    if (tooltip.empty()) {
+      tooltip = d3
+        .select(parentEl)
+        .append("div")
+        .attr("class", "wc-tooltip")
+        .style("position", "absolute")
+        .style("background", "rgba(27,58,107,0.92)")
+        .style("color", "#fff")
+        .style("padding", "6px 12px")
+        .style("border-radius", "6px")
+        .style("font-size", "13px")
+        .style("pointer-events", "none")
+        .style("display", "none")
+        .style("z-index", "100")
+        .style("box-shadow", "0 2px 8px rgba(0,0,0,0.3)");
+    }
+  }, [words]);
 
   return (
-    <div style={{ width: "100%" }}>
-      <div style={{ fontWeight: 700, marginBottom: 8 }}>Nube de palabras (IA)</div>
-
-      <div
-        style={{
-          border: "1px solid rgba(148, 163, 184, 0.25)",
-          borderRadius: 12,
-          padding: 10,
-          background: "rgba(2, 6, 23, 0.25)",
-        }}
-      >
-        {!hasData ? (
-          <div style={{ padding: "18px 8px", color: "#94a3b8" }}>
-            Sin datos para la nube de palabras.
-          </div>
-        ) : (
-          <canvas
-            ref={canvasRef}
-            width={width}
-            height={height}
-            style={{ width: "100%", height }}
-          />
-        )}
-      </div>
+    <div style={{ position: "relative", width: "100%", minHeight: 420 }}>
+      <svg ref={svgRef} style={{ width: "100%", height: 420 }} />
     </div>
   );
 }

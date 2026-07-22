@@ -690,3 +690,119 @@
 .main-card {
   animation: fadeInUp 0.35s ease forwards;
 }
+
+/* Agregar en App.css o index.css */
+
+/* WordCloud container */
+.wordcloud-wrapper {
+  position: relative;
+  background: linear-gradient(135deg, #f8faff 0%, #eef3fb 100%);
+  border-radius: 10px;
+  padding: 10px;
+  overflow: hidden;
+}
+
+/* Graph container */
+.graph-wrapper {
+  position: relative;
+  background: #0f1923;
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+/* Tooltip global */
+.wc-tooltip {
+  font-family: 'Segoe UI', Arial, sans-serif;
+}
+
+/* ── Secciones de resultado ── */
+.result-section {
+  margin-bottom: 28px;
+}
+
+.result-section-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  font-size: 15px;
+  font-weight: 700;
+  color: #1B3A6B;
+  margin-bottom: 14px;
+  padding-bottom: 8px;
+  border-bottom: 2px solid #e8edf5;
+}
+
+.result-badge {
+  font-size: 11px;
+  font-weight: 600;
+  background: #e8edf5;
+  color: #2E5FA3;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.result-summary {
+  background: #f8faff;
+  border-left: 4px solid #2E5FA3;
+  padding: 14px 18px;
+  border-radius: 0 8px 8px 0;
+  font-size: 14px;
+  line-height: 1.7;
+  color: #333;
+}
+
+/* ── Debug ── */
+.btn-debug {
+  background: transparent;
+  border: 1px solid #ccd6e8;
+  color: #2E5FA3;
+  padding: 6px 14px;
+  border-radius: 6px;
+  font-size: 12px;
+  cursor: pointer;
+  transition: all 0.2s;
+}
+
+.btn-debug:hover {
+  background: #e8edf5;
+}
+
+.debug-box {
+  margin-top: 10px;
+  background: #0f1923;
+  color: #7ec8e3;
+  padding: 16px;
+  border-radius: 8px;
+  font-size: 11px;
+  overflow-x: auto;
+  max-height: 400px;
+  overflow-y: auto;
+  line-height: 1.5;
+}
+
+/* ── Log SSE ── */
+.events-log {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  max-height: 220px;
+  overflow-y: auto;
+}
+
+.event-item {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  padding: 6px 10px;
+  border-radius: 6px;
+  font-size: 12px;
+  background: #f5f7fb;
+}
+
+.event-item.done    { background: #edfaf3; }
+.event-item.error   { background: #fdf0f0; }
+.event-item.progress { background: #f0f4ff; }
+
+.event-stage  { font-weight: 700; color: #1B3A6B; min-width: 90px; }
+.event-status { flex: 1; color: #555; }
+.event-pct    { font-weight: 600; color: #2E5FA3; min-width: 40px; text-align: right; }

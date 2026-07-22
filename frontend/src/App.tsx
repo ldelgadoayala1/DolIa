@@ -1,17 +1,31 @@
+// frontend/src/App.tsx
 import { useEffect, useMemo, useState } from "react";
-
 import "../css/index.css";
 import "../css/App.css";
 import WordCloud from "./components/WordCloud";
 import GraphView from "./components/GraphView";
 
-type WordItem  = { word: string; weight: number };
-type GraphNode = { id: string; label: string };
-type GraphEdge = { id?: string; source: string; target: string; weight?: number };
+// ✅ Tipos alineados con lo que devuelve el backend
+type WordItem = { text: string; value: number };
+
+type GraphNode = {
+  id: string;
+  label: string;
+  weight?: number;
+  group?: string;
+};
+
+type GraphEdge = {
+  id?: string;
+  source: string;
+  target: string;
+  weight?: number;
+};
+
 type FinalResult = {
-  summary?:   string;
+  summary?: string;
   wordcloud?: WordItem[];
-  graph?:     { nodes: GraphNode[]; edges: GraphEdge[] };
+  graph?: { nodes: GraphNode[]; edges: GraphEdge[] };
 };
 
 const STAGES = ["scraping", "cleaning", "classifying", "building", "finalize"];
@@ -47,10 +61,9 @@ export default function App() {
   const apiEventsBase = "http://localhost:8000/events";
 
   const normalizedSources = useMemo(() => sources, [sources]);
-
-  /* ── Rango visual del slider ── */
   const rangePct = `${((maxResults - 1) / 199) * 100}%`;
 
+  // ── Iniciar búsqueda ──────────────────────────────────────────
   const startSearch = async () => {
     setResult(null);
     setEvents([]);
@@ -65,9 +78,9 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          sources:          normalizedSources,
-          max_results:      maxResults,
-          include_graph:    true,
+          sources:           normalizedSources,
+          max_results:       maxResults,
+          include_graph:     true,
           include_wordcloud: true,
         }),
       });
@@ -83,11 +96,12 @@ export default function App() {
       setJobId(data.job_id);
       setStatus("Conectando al stream...");
     } catch (err) {
-      setStatus("Error no se pudo establecer comunicacion con el backend.");
+      setStatus("Error: no se pudo conectar con el backend.");
       setLoading(false);
     }
   };
 
+  // ── SSE: escuchar eventos ─────────────────────────────────────
   useEffect(() => {
     if (!jobId) return;
 
@@ -103,7 +117,46 @@ export default function App() {
           setStage(payload.stage ?? "finalize");
           setProgress(payload.progress ?? 100);
           setStatus(payload.status ?? "Completado");
-          if (payload.data) setResult(payload.data as FinalResult);
+
+          // ✅ Normalizar datos del resultado
+          if (payload.data) {
+            const raw = payload.data;
+
+            // Normalizar wordcloud: acepta {text,value} o {word,weight}
+            const wordcloud: WordItem[] = (raw.wordcloud ?? []).map(
+              (w: any) => ({
+                text:  w.text  ?? w.word  ?? "",
+                value: w.value ?? w.weight ?? 1,
+              })
+            );
+
+            // Normalizar nodos del grafo
+            const nodes: GraphNode[] = (raw.graph?.nodes ?? []).map(
+              (n: any) => ({
+                id:     String(n.id ?? n.node_id ?? ""),
+                label:  String(n.label ?? n.name ?? n.id ?? ""),
+                weight: Number(n.weight ?? n.frequency ?? 1),
+                group:  String(n.group ?? n.community ?? "0"),
+              })
+            );
+
+            // Normalizar aristas del grafo
+            const edges: GraphEdge[] = (raw.graph?.edges ?? []).map(
+              (e: any, i: number) => ({
+                id:     e.id ?? `edge_${i}`,
+                source: String(e.source ?? e.from ?? ""),
+                target: String(e.target ?? e.to   ?? ""),
+                weight: Number(e.weight ?? 1),
+              })
+            );
+
+            setResult({
+              summary:   raw.summary ?? "",
+              wordcloud,
+              graph: nodes.length > 0 ? { nodes, edges } : undefined,
+            });
+          }
+
           setLoading(false);
           es.close();
           return;
@@ -118,14 +171,15 @@ export default function App() {
           return;
         }
 
-        setStage(payload.stage   ?? "");
+        setStage(payload.stage    ?? "");
         setProgress(payload.progress ?? 0);
-        setStatus(payload.status ?? "");
-      } catch (_) { /* ignorar */ }
+        setStatus(payload.status  ?? "");
+
+      } catch (_) { /* ignorar parse errors */ }
     };
 
     es.onerror = () => {
-      setStatus("Error no se pudo establecer comunicacion con el LLM");
+      setStatus("Error de conexión con el servidor.");
       setLoading(false);
       es.close();
     };
@@ -133,6 +187,7 @@ export default function App() {
     return () => { es.close(); };
   }, [jobId]);
 
+  // ── Derivados ─────────────────────────────────────────────────
   const wordcloud = result?.wordcloud ?? [];
   const graph     = result?.graph;
   const isDone    = stage === "finalize" || (progress === 100 && !loading);
@@ -140,13 +195,14 @@ export default function App() {
 
   const getStageState = (s: string) => {
     if (isError && s === "error") return "error";
-    const idx        = STAGES.indexOf(stage);
-    const sIdx       = STAGES.indexOf(s);
+    const idx  = STAGES.indexOf(stage);
+    const sIdx = STAGES.indexOf(s);
     if (sIdx < idx)  return "done";
     if (sIdx === idx) return "active";
     return "";
   };
 
+  // ── Render ────────────────────────────────────────────────────
   return (
     <div style={{ display: "flex", flexDirection: "column", minHeight: "100vh" }}>
 
@@ -170,9 +226,7 @@ export default function App() {
         {/* ════ SIDEBAR ════ */}
         <aside className="app-sidebar">
           <div className="sidebar-card">
-            <div className="sidebar-card-title">
-              🔍 Búsqueda
-            </div>
+            <div className="sidebar-card-title">🔍 Búsqueda</div>
 
             {/* Query */}
             <div className="form-group">
@@ -238,7 +292,7 @@ export default function App() {
               </div>
             </div>
 
-            {/* Botón */}
+            {/* Botón buscar */}
             <button
               className="btn-search"
               onClick={startSearch}
@@ -260,31 +314,25 @@ export default function App() {
         {/* ════ MAIN ════ */}
         <main className="app-main">
 
-          {/* ── Progreso ── */}
+          {/* ── Pipeline ── */}
           <div className="main-card">
             <div className="main-card-header">
               <div className="main-card-title">Pipeline de análisis</div>
             </div>
 
-            {/* Etapas */}
             <div className="progress-stages">
               {STAGES.map((s) => (
-                <span
-                  key={s}
-                  className={`stage-pill ${getStageState(s)}`}
-                >
+                <span key={s} className={`stage-pill ${getStageState(s)}`}>
                   {STAGE_LABELS[s] ?? s}
                 </span>
               ))}
             </div>
 
-            {/* Info */}
             <div className="progress-info">
               <span className="progress-status">{status}</span>
               <span className="progress-pct">{progress}%</span>
             </div>
 
-            {/* Barra */}
             <div className="progress-track">
               <div
                 className={`progress-fill ${isDone && !isError ? "complete" : ""} ${isError ? "error" : ""}`}
@@ -303,60 +351,92 @@ export default function App() {
               <div className="results-empty">
                 <div className="results-empty-icon">📊</div>
                 <div className="results-empty-text">
-                  Aún no hay resultados
-                </div>
-                <div className="results-empty-sub">
-                  Ingresa un término y presiona <strong>Buscar</strong> para comenzar
+                  Aún no hay resultados. Realiza una búsqueda para comenzar.
                 </div>
               </div>
             ) : (
-              <div className="fade-in-up">
+              <div className="results-content">
+
+                {/* Resumen */}
                 {result.summary && (
-                  <div className="summary-box">
-                    <div className="summary-label">Resumen IA</div>
-                    {result.summary}
+                  <div className="result-section">
+                    <div className="result-section-title">📝 Resumen</div>
+                    <div className="result-summary">{result.summary}</div>
                   </div>
                 )}
-                <div className="viz-grid">
-                  <div className="viz-panel">
-                    <div className="viz-panel-title">☁️ Nube de palabras</div>
-                    <WordCloud wordcloud={wordcloud} />
+
+                {/* Word Cloud */}
+                {wordcloud.length > 0 && (
+                  <div className="result-section">
+                    <div className="result-section-title">
+                      ☁️ Nube de palabras
+                      <span className="result-badge">
+                        {wordcloud.length} términos
+                      </span>
+                    </div>
+                    <WordCloud words={wordcloud} />
                   </div>
-                  <div className="viz-panel">
-                    <div className="viz-panel-title">🕸️ Grafo de relaciones</div>
-                    <GraphView graph={graph} height={480} />
+                )}
+
+                {/* Grafo */}
+                {graph && graph.nodes.length > 0 && (
+                  <div className="result-section">
+                    <div className="result-section-title">
+                      🔗 Grafo de relaciones
+                      <span className="result-badge">
+                        {graph.nodes.length} nodos · {graph.edges.length} aristas
+                      </span>
+                    </div>
+                    <GraphView data={graph} />
                   </div>
+                )}
+
+                {/* Debug toggle */}
+                <div style={{ marginTop: "16px" }}>
+                  <button
+                    className="btn-debug"
+                    onClick={() => setShowDebug((v) => !v)}
+                  >
+                    {showDebug ? "🙈 Ocultar debug" : "🐛 Ver datos raw"}
+                  </button>
+
+                  {showDebug && (
+                    <pre className="debug-box">
+                      {JSON.stringify(result, null, 2)}
+                    </pre>
+                  )}
                 </div>
               </div>
             )}
           </div>
 
-          {/* ── Debug ── */}
-          <div className="main-card debug-card">
-            <div className="main-card-header">
-              <div className="main-card-title">Eventos SSE</div>
-              <button
-                className="debug-toggle"
-                onClick={() => setShowDebug((v) => !v)}
-              >
-                {showDebug ? "Ocultar" : "Mostrar"} ({events.length})
-              </button>
+          {/* ── Log de eventos SSE ── */}
+          {events.length > 0 && (
+            <div className="main-card">
+              <div className="main-card-header">
+                <div className="main-card-title">
+                  📡 Eventos SSE
+                  <span className="result-badge">{events.length}</span>
+                </div>
+              </div>
+              <div className="events-log">
+                {events.map((ev, i) => (
+                  <div key={i} className={`event-item ${ev.type ?? ""}`}>
+                    <span className="event-stage">
+                      {STAGE_LABELS[ev.stage] ?? ev.stage ?? "—"}
+                    </span>
+                    <span className="event-status">{ev.status ?? ""}</span>
+                    <span className="event-pct">
+                      {ev.progress != null ? `${ev.progress}%` : ""}
+                    </span>
+                  </div>
+                ))}
+              </div>
             </div>
-            {showDebug && (
-              <pre className="debug-pre">
-                {JSON.stringify(events, null, 2)}
-              </pre>
-            )}
-          </div>
+          )}
 
         </main>
       </div>
-
-      {/* ── FOOTER ── */}
-      <footer className="app-footer">
-        <strong>DolIA</strong> — Proyecto de Investigación ·{" "}
-        Universidad Andrés Bello · {new Date().getFullYear()}
-      </footer>
     </div>
   );
 }
