@@ -1,48 +1,67 @@
 import os
 import json
+import time
 import redis
 from typing import Generator
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
+STREAM_TIMEOUT = 120  # segundos máximo esperando eventos
 
 
 def push_event(job_id: str, event: dict) -> None:
-    """
-    Empuja un evento SSE a una lista Redis asociada al job.
-    Formato esperado por frontend:
-      { "stage": "...", "progress": 0-100, "status": "...", "type": "...", "data": {...} }
-    """
+    """Worker llama esto para empujar eventos SSE a Redis."""
     r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     key = f"job:{job_id}:events"
     r.rpush(key, json.dumps(event))
+    # TTL de 10 minutos para no acumular basura en Redis
+    r.expire(key, 600)
 
 
 def event_stream(job_id: str) -> Generator[str, None, None]:
     """
-    Produce una respuesta SSE.
-    Convención SSE:
-      event: <stage opcional>
-      data: <json> 
+    API llama esto para hacer streaming SSE al frontend.
+    Lee eventos desde Redis LIST usando polling liviano.
     """
     r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-    events_key = f"job:{job_id}:events"
+    key = f"job:{job_id}:events"
+    status_key = f"job:{job_id}:status"
+    index = 0
+    deadline = time.time() + STREAM_TIMEOUT
 
-    # Si no hay eventos aún, esperamos con BRPOP sobre la lista.
-    # Cuando el worker mande type="done", cortamos.
-    while True:
-        item = r.brpop(events_key, timeout=60)
-        if not item:
-            # timeout: enviamos keep-alive para que el browser siga abierto
-            yield "event: keepalive\n" "data: {}\n\n"
-            continue
+    # Evento inicial de conexión
+    yield f"data: {json.dumps({'type': 'connected', 'job_id': job_id})}\n\n"
 
-        _, raw = item
-        payload = json.loads(raw)
+    while time.time() < deadline:
+        # Leer todos los eventos nuevos desde el índice actual
+        events = r.lrange(key, index, -1)
 
-        # En SSE el formato típico es:
-        # data: <string>\n\n
-        # (siempre enviamos data como JSON string)
-        yield "data: " + json.dumps(payload) + "\n\n"
+        for raw in events:
+            index += 1
+            try:
+                event = json.loads(raw)
+            except Exception:
+                continue
 
-        if payload.get("type") == "done" or payload.get("type") == "error":
-            break
+            yield f"data: {json.dumps(event)}\n\n"
+
+            # Si el evento es terminal, cerramos el stream
+            if event.get("type") in ("done", "error"):
+                return
+
+        # Verificar si el job ya terminó aunque no haya más eventos
+        status = r.get(status_key)
+        if status in ("done", "error"):
+            # Dar un último intento de vaciar la cola
+            remaining = r.lrange(key, index, -1)
+            for raw in remaining:
+                try:
+                    yield f"data: {json.dumps(json.loads(raw))}\n\n"
+                except Exception:
+                    pass
+            return
+
+        # Polling cada 300ms para no saturar Redis
+        time.sleep(0.3)
+
+    # Timeout alcanzado
+    yield f"data: {json.dumps({'type': 'error', 'message': 'Stream timeout'})}\n\n"

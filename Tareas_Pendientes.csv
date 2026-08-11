@@ -1,0 +1,31 @@
+﻿Objetivo,Tarea,HH,Estado,Detalle
+Preparar arquitectura,Definir esquema de datos (posts, score, etiquetas, clusters, grafo),4,Parcial,Los datos viajan como dicts sueltos entre worker y frontend; no hay un esquema formal documentado ni validado
+Preparar arquitectura,Diseñar contrato de APIs (iniciar/buscar_estado/final_result),6,Parcial,"Existen /search, /events y /job_result, pero faltan endpoints dedicados de nube y grafo"
+Backend: scraping,Normalización de texto y deduplicación,6,Falta,No hay lógica de normalización ni de deduplicación de posts en el scraper
+Almacenamiento,DB para posts/metadata y trazabilidad por query_id,6,Falta,Postgres está en docker-compose.yml pero ningún servicio se conecta a él; solo se usa Redis como cola/caché temporal (TTL 600s)
+Almacenamiento,Vector store o almacenamiento de embeddings,6,Falta,No existe ningún vector store ni generación de embeddings
+Pipeline: IA,Definir chunking/cleaning para embeddings,4,Falta,No implementado
+Pipeline: IA,Embeddings con Gemma 4 (batching),14,Falta,config/llm_config.json apunta a Ollama/gemma-4 pero nunca se invoca desde el código
+Pipeline: IA,Ranking de relevancia por tema (score),14,Falta,El score mostrado en el frontend es simulado (valores decrecientes fijos), no calculado por IA
+Pipeline: IA,Etiquetado semántico (tratamiento/síntoma/evidencia/contraindicaciones),10,Falta,No implementado
+Pipeline: IA,Clustering semántico para grafo/árbol,12,Falta,No implementado
+Pipeline: IA,Construcción de grafo (nodes/edges con similitud),9,Falta,"El grafo actual en worker/main.py es generado con reglas simples (topic x fuente), no por similitud real"
+Backend: APIs,Endpoint nube de palabras (ponderada por score y filtros),6,Falta,La nube va embebida en el resultado final del job; no existe endpoint propio
+Backend: APIs,Endpoint grafo (estructura + metadatos para UI),8,Falta,El grafo va embebido en el resultado final del job; no existe endpoint propio
+Backend: control de parámetros,Implementar parámetro variable max_results + estrategia de corte por score,6,Parcial,max_results funciona (slider 1-200) pero no hay corte/orden por score
+Backend: performance,Caché opcional por query (si hay repetición),4,Falta,No implementado
+Frontend: UI base,Manejo de errores/fallback a 2 fuentes,8,Parcial,Hay manejo de error genérico en el SSE pero no fallback automático a otra fuente (solo StackOverflow está activo)
+Frontend: visualizaciones,Interacciones nube (hover/click para filtrar),6,Falta,WordCloud.tsx no tiene handlers de click/hover para filtrar
+Frontend: visualizaciones,Coordinación de filtros: nube <-> grafo <-> listado,10,Falta,Cada visualización es independiente; no hay estado de filtro compartido
+Frontend: resultados,Panel de detalle por nodo/cluster (posts y etiquetas),6,Falta,No implementado
+Calidad: validación,Sanitización del texto + manejo de ruido (HTML, spam, boilerplate),5,Parcial,Solo se limpia HTML (_truncate); no hay filtro de spam ni boilerplate
+Calidad: pruebas,Tests unitarios scraping + pipeline (con dataset pequeño/mocks),8,Falta,"No existe suite de tests; test/ solo tiene un script de snapshot para debugging"
+Calidad: pruebas,Pruebas integradas end-to-end (incluyendo estados de progreso),6,Falta,No implementado
+Observabilidad,Logging estructurado por query_id y etapas,6,Parcial,Solo hay print() sueltos en el worker, sin formato estructurado (JSON/logging)
+Observabilidad,Métricas de rendimiento por etapa (scraping/IA/visualización),4,Falta,No implementado
+Documentación,README: setup local + cómo lanzar prototipo,4,Falta,No existe README en el repo
+Documentación,Documentar endpoints y formatos de respuesta,3,Parcial,Solo la documentación automática de Swagger/FastAPI; sin doc propia de formatos de respuesta
+Seguridad/Legal (prototipo),Checklist de scraping responsable (robots/limitación/credenciales si aplica),3,Falta,No hay checklist documentado (aunque se usa la API pública oficial de StackExchange)
+Demo del prototipo,"Preparar demo con 2 temas (incl. Tratamientos resfriado común)",6,Parcial,Hay un query de ejemplo por defecto pero no evidencia de una demo formal preparada
+Demo del prototipo,Pulido final UX + optimización de percepción de velocidad,6,Parcial,Ya se aplicaron estilos UNAB; falta optimización de percepción de velocidad
+Bug técnico (no está en el Excel),Corregir import roto en worker/main.py: "services.stackoverflowscraper" vs carpeta real "services/stackoverflow_scraper",N/A,Bloqueante,Puede estar rompiendo el arranque del worker en runtime

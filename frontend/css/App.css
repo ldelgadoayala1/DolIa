@@ -507,6 +507,48 @@
 /* ══════════════════════════════════════════
    RESULTADOS
 ══════════════════════════════════════════ */
+.data-table-wrap {
+  overflow-x: auto;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+
+.data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.9rem;
+}
+
+.data-table th,
+.data-table td {
+  padding: 12px 14px;
+  text-align: left;
+  border-bottom: 1px solid var(--gray-100);
+}
+
+.data-table th {
+  background: var(--gray-50);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+}
+
+.data-table td a {
+  color: var(--unab-blue-mid);
+  text-decoration: none;
+  word-break: break-all;
+}
+
+.data-table td a:hover {
+  text-decoration: underline;
+}
+
+.data-table tr:nth-child(even) {
+  background: rgba(46,95,163,0.03);
+}
+
 .results-empty {
   display: flex;
   flex-direction: column;

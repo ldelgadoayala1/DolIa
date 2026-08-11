@@ -22,10 +22,20 @@ type GraphEdge = {
   weight?: number;
 };
 
+type PostRow = {
+  title: string;
+  url: string;
+  source: string;
+  score: number;
+  date: string;
+  author: string;
+};
+
 type FinalResult = {
   summary?: string;
   wordcloud?: WordItem[];
   graph?: { nodes: GraphNode[]; edges: GraphEdge[] };
+  posts?: PostRow[];
 };
 
 const STAGES = ["scraping", "cleaning", "classifying", "building", "finalize"];
@@ -40,14 +50,15 @@ const STAGE_LABELS: Record<string, string> = {
 };
 
 const SOURCE_ICONS: Record<string, string> = {
-  reddit:        "🟠",
   stackoverflow: "🟡",
 };
+
+const AVAILABLE_SOURCES = ["stackoverflow"];
 
 export default function App() {
   const [query,      setQuery]      = useState<string>("resfriado común");
   const [maxResults, setMaxResults] = useState<number>(30);
-  const [sources,    setSources]    = useState<string[]>(["reddit", "stackoverflow"]);
+  const [sources,    setSources]    = useState<string[]>(["stackoverflow"]);
   const [jobId,      setJobId]      = useState<string>("");
   const [events,     setEvents]     = useState<any[]>([]);
   const [progress,   setProgress]   = useState<number>(0);
@@ -122,7 +133,6 @@ export default function App() {
           if (payload.data) {
             const raw = payload.data;
 
-            // Normalizar wordcloud: acepta {text,value} o {word,weight}
             const wordcloud: WordItem[] = (raw.wordcloud ?? []).map(
               (w: any) => ({
                 text:  w.text  ?? w.word  ?? "",
@@ -130,7 +140,6 @@ export default function App() {
               })
             );
 
-            // Normalizar nodos del grafo
             const nodes: GraphNode[] = (raw.graph?.nodes ?? []).map(
               (n: any) => ({
                 id:     String(n.id ?? n.node_id ?? ""),
@@ -140,7 +149,6 @@ export default function App() {
               })
             );
 
-            // Normalizar aristas del grafo
             const edges: GraphEdge[] = (raw.graph?.edges ?? []).map(
               (e: any, i: number) => ({
                 id:     e.id ?? `edge_${i}`,
@@ -150,10 +158,20 @@ export default function App() {
               })
             );
 
+            const posts: PostRow[] = (raw.posts ?? []).map((p: any) => ({
+              title: String(p.title ?? "Sin título"),
+              url: String(p.url ?? "#"),
+              source: String(p.source ?? "StackOverflow"),
+              score: Number(p.score ?? 0),
+              date: String(p.date ?? "-"),
+              author: String(p.author ?? "-"),
+            }));
+
             setResult({
               summary:   raw.summary ?? "",
               wordcloud,
               graph: nodes.length > 0 ? { nodes, edges } : undefined,
+              posts,
             });
           }
 
@@ -259,11 +277,11 @@ export default function App() {
               />
             </div>
 
-            {/* Fuentes */}
+            {/* ✅ Fuentes — Solo StackOverflow */}
             <div className="form-group">
               <label className="form-label">Fuentes</label>
               <div className="sources-grid">
-                {["reddit", "stackoverflow"].map((s) => {
+                {AVAILABLE_SOURCES.map((s) => {
                   const checked = sources.includes(s);
                   return (
                     <label
@@ -281,15 +299,16 @@ export default function App() {
                           )
                         }
                       />
-                      <div className="source-checkbox-ui" />
-                      <span className="source-icon">
-                        {SOURCE_ICONS[s] ?? "🌐"}
-                      </span>
-                      <span className="source-label">{s}</span>
+                      <span>{SOURCE_ICONS[s]}</span>
+                      <span style={{ textTransform: "capitalize" }}>{s}</span>
                     </label>
                   );
                 })}
               </div>
+              {/* ✅ Nota futura */}
+              <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
+                🔜 Más fuentes próximamente
+              </p>
             </div>
 
             {/* Botón buscar */}
@@ -298,142 +317,114 @@ export default function App() {
               onClick={startSearch}
               disabled={loading || sources.length === 0}
             >
-              {loading ? "⏳ Procesando..." : "🚀 Buscar"}
+              {loading ? "⏳ Buscando..." : "🔍 Buscar"}
             </button>
-
-            {/* Job ID */}
-            {jobId && (
-              <div className="job-id-box">
-                <div className="job-id-label">Job ID</div>
-                <div className="job-id-value">{jobId}</div>
-              </div>
-            )}
           </div>
-        </aside>
 
-        {/* ════ MAIN ════ */}
-        <main className="app-main">
-
-          {/* ── Pipeline ── */}
-          <div className="main-card">
-            <div className="main-card-header">
-              <div className="main-card-title">Pipeline de análisis</div>
-            </div>
-
-            <div className="progress-stages">
-              {STAGES.map((s) => (
-                <span key={s} className={`stage-pill ${getStageState(s)}`}>
-                  {STAGE_LABELS[s] ?? s}
-                </span>
+          {/* ── Pipeline de etapas ── */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">⚙️ Pipeline</div>
+            <div className="pipeline-steps">
+              {STAGES.filter(s => s !== "error").map((s) => (
+                <div key={s} className={`pipeline-step ${getStageState(s)}`}>
+                  <div className="step-dot" />
+                  <span>{STAGE_LABELS[s]}</span>
+                </div>
               ))}
             </div>
+          </div>
 
-            <div className="progress-info">
-              <span className="progress-status">{status}</span>
-              <span className="progress-pct">{progress}%</span>
-            </div>
-
-            <div className="progress-track">
+          {/* ── Estado ── */}
+          <div className="sidebar-card">
+            <div className="sidebar-card-title">📡 Estado</div>
+            <div className="progress-bar-wrap">
               <div
-                className={`progress-fill ${isDone && !isError ? "complete" : ""} ${isError ? "error" : ""}`}
+                className="progress-bar-fill"
                 style={{ width: `${progress}%` }}
               />
             </div>
+            <p className="status-text">{status}</p>
           </div>
+        </aside>
 
-          {/* ── Resultados ── */}
-          <div className="main-card">
-            <div className="main-card-header">
-              <div className="main-card-title">Resultados</div>
-            </div>
+        {/* ════ MAIN CONTENT ════ */}
+        <main className="app-main">
 
-            {!result ? (
-              <div className="results-empty">
-                <div className="results-empty-icon">📊</div>
-                <div className="results-empty-text">
-                  Aún no hay resultados. Realiza una búsqueda para comenzar.
+          {/* ── WordCloud ── */}
+          {wordcloud.length > 0 && (
+            <section className="result-card">
+              <h2 className="result-card-title">☁️ Nube de Palabras</h2>
+              <WordCloud words={wordcloud} />
+            </section>
+          )}
+
+          {/* ── Grafo ── */}
+          {graph && (
+            <section className="result-card">
+              <h2 className="result-card-title">🕸️ Grafo de Relaciones</h2>
+              <GraphView nodes={graph.nodes} edges={graph.edges} />
+            </section>
+          )}
+
+          {/* ── DataTable ── */}
+          {result?.posts && (
+            <section className="result-card">
+              <h2 className="result-card-title">📋 Resultados</h2>
+              {result.posts.length > 0 ? (
+                <div className="data-table-wrap">
+                  <table className="data-table">
+                    <thead>
+                      <tr>
+                        <th>Título</th>
+                        <th>Enlace</th>
+                        <th>Fuente</th>
+                        <th>Score</th>
+                        <th>Fecha</th>
+                        <th>Autor</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {result.posts.map((post, index) => (
+                        <tr key={`${post.title}-${index}`}>
+                          <td>{post.title}</td>
+                          <td>
+                            {post.url && post.url !== "#" ? (
+                              <a href={post.url} target="_blank" rel="noreferrer">
+                                {post.url}
+                              </a>
+                            ) : (
+                              "-"
+                            )}
+                          </td>
+                          <td>{post.source}</td>
+                          <td>{post.score}</td>
+                          <td>{post.date}</td>
+                          <td>{post.author}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
                 </div>
-              </div>
-            ) : (
-              <div className="results-content">
+              ) : (
+                <p className="status-text">
+                  No se encontraron resultados respecto a la búsqueda actual.
+                </p>
+              )}
+            </section>
+          )}
 
-                {/* Resumen */}
-                {result.summary && (
-                  <div className="result-section">
-                    <div className="result-section-title">📝 Resumen</div>
-                    <div className="result-summary">{result.summary}</div>
-                  </div>
-                )}
-
-                {/* Word Cloud */}
-                {wordcloud.length > 0 && (
-                  <div className="result-section">
-                    <div className="result-section-title">
-                      ☁️ Nube de palabras
-                      <span className="result-badge">
-                        {wordcloud.length} términos
-                      </span>
-                    </div>
-                    <WordCloud words={wordcloud} />
-                  </div>
-                )}
-
-                {/* Grafo */}
-                {graph && graph.nodes.length > 0 && (
-                  <div className="result-section">
-                    <div className="result-section-title">
-                      🔗 Grafo de relaciones
-                      <span className="result-badge">
-                        {graph.nodes.length} nodos · {graph.edges.length} aristas
-                      </span>
-                    </div>
-                    <GraphView data={graph} />
-                  </div>
-                )}
-
-                {/* Debug toggle */}
-                <div style={{ marginTop: "16px" }}>
-                  <button
-                    className="btn-debug"
-                    onClick={() => setShowDebug((v) => !v)}
-                  >
-                    {showDebug ? "🙈 Ocultar debug" : "🐛 Ver datos raw"}
-                  </button>
-
-                  {showDebug && (
-                    <pre className="debug-box">
-                      {JSON.stringify(result, null, 2)}
-                    </pre>
-                  )}
-                </div>
-              </div>
-            )}
-          </div>
-
-          {/* ── Log de eventos SSE ── */}
-          {events.length > 0 && (
-            <div className="main-card">
-              <div className="main-card-header">
-                <div className="main-card-title">
-                  📡 Eventos SSE
-                  <span className="result-badge">{events.length}</span>
-                </div>
-              </div>
-              <div className="events-log">
-                {events.map((ev, i) => (
-                  <div key={i} className={`event-item ${ev.type ?? ""}`}>
-                    <span className="event-stage">
-                      {STAGE_LABELS[ev.stage] ?? ev.stage ?? "—"}
-                    </span>
-                    <span className="event-status">{ev.status ?? ""}</span>
-                    <span className="event-pct">
-                      {ev.progress != null ? `${ev.progress}%` : ""}
-                    </span>
-                  </div>
-                ))}
-              </div>
+          {/* ── Estado vacío ── */}
+          {!loading && !result && (
+            <div className="empty-state">
+              <div className="empty-icon">🔬</div>
+              <h3>Ingresa una dolencia para comenzar</h3>
+              <p>
+                El sistema analizará publicaciones de StackOverflow
+                y generará visualizaciones con IA.
+              </p>
             </div>
           )}
+
 
         </main>
       </div>
