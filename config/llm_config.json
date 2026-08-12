@@ -1,9 +1,10 @@
 {
-  "health": "/health",
-  "base_url": "http://localhost:11434/v1",
-  "api_key": "",
+  "name": "UNAB Gestion IA",
+  "provider": "openai-compatible",
+  "base_url": "https://quotas.devhub.cl/api/v1",
   "endpoints": {
-    "chat": "/chat/completions"
+    "models": "/models",
+    "chat_completions": "/chat/completions"
   },
-  "models": ["gemma-4"]
+  "model": "gemma4:e2b"
 }
