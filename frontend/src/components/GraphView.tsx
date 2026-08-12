@@ -7,7 +7,7 @@ cytoscape.use(fcose);
 
 interface GraphData {
   nodes: { id: string; label: string; weight?: number; group?: string }[];
-  edges: { id?: string; source: string; target: string; weight?: number }[];
+  edges: { id?: string; source: string; target: string; weight?: number; relation?: string }[];
 }
 
 interface Props {
@@ -76,6 +76,7 @@ export default function GraphView({ data }: Props) {
             source: e.source,
             target: e.target,
             weight: e.weight || 1,
+            relation: e.relation || "",
             colorIdx: i % EDGE_COLORS.length,
           },
         })),
@@ -187,6 +188,52 @@ export default function GraphView({ data }: Props) {
 
     const cy = cyRef.current;
 
+    // ✅ Tooltip de relación (creado una sola vez, reutilizado entre renders)
+    const wrapperEl = containerRef.current.parentElement!;
+    let tooltip = wrapperEl.querySelector<HTMLDivElement>(".graph-tooltip");
+    if (!tooltip) {
+      tooltip = document.createElement("div");
+      tooltip.className = "graph-tooltip";
+      Object.assign(tooltip.style, {
+        position: "absolute",
+        background: "rgba(15,25,35,0.95)",
+        color: "#fff",
+        padding: "6px 12px",
+        borderRadius: "6px",
+        fontSize: "12px",
+        fontFamily: "'Segoe UI', sans-serif",
+        pointerEvents: "none",
+        display: "none",
+        zIndex: "100",
+        maxWidth: "220px",
+        boxShadow: "0 2px 8px rgba(0,0,0,0.4)",
+      });
+      wrapperEl.appendChild(tooltip);
+    }
+    const tooltipEl = tooltip;
+
+    // ✅ Hover en arista: mostrar la relación inferida por la IA
+    cy.on("mouseover", "edge", (evt) => {
+      const edge = evt.target;
+      const relation = edge.data("relation");
+      if (!relation) return;
+      const sourceLabel = edge.source().data("label");
+      const targetLabel = edge.target().data("label");
+      tooltipEl.innerHTML = `<strong>${sourceLabel} ↔ ${targetLabel}</strong><br/>${relation}`;
+      tooltipEl.style.display = "block";
+    });
+
+    cy.on("mousemove", "edge", (evt) => {
+      const originalEvent = evt.originalEvent as MouseEvent;
+      const rect = containerRef.current!.getBoundingClientRect();
+      tooltipEl.style.left = `${originalEvent.clientX - rect.left + 12}px`;
+      tooltipEl.style.top = `${originalEvent.clientY - rect.top - 28}px`;
+    });
+
+    cy.on("mouseout", "edge", () => {
+      tooltipEl.style.display = "none";
+    });
+
     // ✅ Hover: resaltar nodo y sus vecinos
     cy.on("mouseover", "node", (evt) => {
       const node = evt.target;
@@ -223,6 +270,7 @@ export default function GraphView({ data }: Props) {
 
     // ✅ Cleanup
     return () => {
+      tooltipEl.style.display = "none";
       if (cyRef.current) {
         cyRef.current.destroy();
         cyRef.current = null;

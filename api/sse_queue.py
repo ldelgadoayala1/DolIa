@@ -5,7 +5,7 @@ import redis
 from typing import Generator
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-STREAM_TIMEOUT = 120  # segundos máximo esperando eventos
+STREAM_TIMEOUT = 240  # segundos máximo esperando eventos (scrape + 2 lotes de anotación + relaciones de grafo, todo vía LLM)
 
 
 def push_event(job_id: str, event: dict) -> None:

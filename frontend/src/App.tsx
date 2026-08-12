@@ -20,6 +20,7 @@ type GraphEdge = {
   source: string;
   target: string;
   weight?: number;
+  relation?: string;
 };
 
 type PostRow = {
@@ -29,6 +30,8 @@ type PostRow = {
   score: number;
   date: string;
   author: string;
+  relevanceScore: number | null;
+  tag: string;
 };
 
 type FinalResult = {
@@ -151,10 +154,11 @@ export default function App() {
 
             const edges: GraphEdge[] = (raw.graph?.edges ?? []).map(
               (e: any, i: number) => ({
-                id:     e.id ?? `edge_${i}`,
-                source: String(e.source ?? e.from ?? ""),
-                target: String(e.target ?? e.to   ?? ""),
-                weight: Number(e.weight ?? 1),
+                id:       e.id ?? `edge_${i}`,
+                source:   String(e.source ?? e.from ?? ""),
+                target:   String(e.target ?? e.to   ?? ""),
+                weight:   Number(e.weight ?? 1),
+                relation: e.relation ? String(e.relation) : undefined,
               })
             );
 
@@ -165,6 +169,11 @@ export default function App() {
               score: Number(p.score ?? 0),
               date: String(p.date ?? "-"),
               author: String(p.author ?? "-"),
+              relevanceScore:
+                p.relevance_score === null || p.relevance_score === undefined
+                  ? null
+                  : Number(p.relevance_score),
+              tag: String(p.tag ?? "-"),
             }));
 
             setResult({
@@ -362,7 +371,7 @@ export default function App() {
           {graph && (
             <section className="result-card">
               <h2 className="result-card-title">🕸️ Grafo de Relaciones</h2>
-              <GraphView nodes={graph.nodes} edges={graph.edges} />
+              <GraphView data={graph} />
             </section>
           )}
 
@@ -379,6 +388,8 @@ export default function App() {
                         <th>Enlace</th>
                         <th>Fuente</th>
                         <th>Score</th>
+                        <th>Relevancia</th>
+                        <th>Etiqueta</th>
                         <th>Fecha</th>
                         <th>Autor</th>
                       </tr>
@@ -398,6 +409,8 @@ export default function App() {
                           </td>
                           <td>{post.source}</td>
                           <td>{post.score}</td>
+                          <td>{post.relevanceScore ?? "-"}</td>
+                          <td>{post.tag}</td>
                           <td>{post.date}</td>
                           <td>{post.author}</td>
                         </tr>

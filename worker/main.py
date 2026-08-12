@@ -1,12 +1,24 @@
 import os
-import time
+import re
 import json
+from collections import Counter, defaultdict
 from typing import Dict, Any, List
 
 import redis
 from services.stackoverflow_scraper.stackoverflow_scraper_service import extract_full_data
+from services.ai.annotator import annotate_posts
+from services.ai.relations import infer_topic_relations
 
 from sse_queue import push_event
+
+STOPWORDS = {
+    "the", "a", "an", "is", "are", "was", "were", "in", "on", "at", "to", "for",
+    "of", "and", "or", "with", "how", "what", "why", "do", "does", "did", "can",
+    "could", "i", "my", "this", "that", "it", "its", "not", "using", "use", "from",
+    "when", "error", "issue", "problem", "get", "getting", "have", "has", "be",
+    "but", "as", "by", "you", "your", "if", "so", "then", "than", "there", "these",
+    "those", "will", "would", "should", "about", "into", "after", "before", "same",
+}
 
 LOG_LEVEL = os.getenv("WORKER_LOG_LEVEL", "INFO")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
@@ -24,6 +36,92 @@ def emit(job_id: str, stage: str, progress: int, status: str, type_: str = "prog
     push_event(job_id, event)
 
 
+def _relevance(post: Dict[str, Any]) -> float:
+    score = post.get("relevance_score")
+    return float(score) if isinstance(score, (int, float)) else 50.0
+
+
+def build_wordcloud(posts: List[Dict[str, Any]], max_words: int = 25) -> List[Dict[str, Any]]:
+    """
+    Frecuencia ponderada por relevance_score (LLM): tags de StackOverflow
+    (señal limpia) pesan más que palabras sueltas del título.
+    """
+    counter: Counter = Counter()
+
+    for post in posts:
+        weight = _relevance(post) / 100 + 0.2
+
+        for tag in post.get("tags", []) or []:
+            counter[tag.lower()] += 3 * weight
+
+        for word in re.findall(r"[a-zA-Záéíóúñ]{3,}", (post.get("title") or "").lower()):
+            if word in STOPWORDS:
+                continue
+            counter[word] += weight
+
+    return [
+        {"word": word, "weight": round(value, 2)}
+        for word, value in counter.most_common(max_words)
+    ]
+
+
+def _cooccurrence_relations(posts: List[Dict[str, Any]], topics: List[str]) -> List[Dict[str, Any]]:
+    """
+    Fallback sin LLM: conecta temas que aparecen juntos en el mismo post.
+    Se usa solo si infer_topic_relations() falla o no encuentra relaciones.
+    """
+    topic_set = set(topics)
+    pair_weight: Dict[tuple, int] = defaultdict(int)
+
+    for post in posts:
+        post_topics = sorted(set(t for t in (post.get("tags") or []) if t in topic_set))
+        for i in range(len(post_topics)):
+            for j in range(i + 1, len(post_topics)):
+                pair_weight[(post_topics[i], post_topics[j])] += 1
+
+    return [
+        {"source": a, "target": b, "weight": min(100, w * 25), "relation": "aparecen juntos en los resultados"}
+        for (a, b), w in pair_weight.items()
+    ]
+
+
+def build_graph(query: str, posts: List[Dict[str, Any]], max_topics: int = 15) -> Dict[str, Any]:
+    """
+    Grafo semántico entre temas (tags de StackOverflow): las aristas y su
+    peso/etiqueta las decide el LLM (infer_topic_relations), no reglas fijas.
+    Si el LLM no puede resolver relaciones, cae a un grafo de co-ocurrencia
+    (temas que aparecen juntos en el mismo post) para no dejar el grafo vacío.
+    """
+    topic_weight: Counter = Counter()
+    for post in posts:
+        for topic in (post.get("tags") or [])[:3]:
+            topic_weight[topic] += 1
+
+    top_topics = [topic for topic, _ in topic_weight.most_common(max_topics)]
+
+    relations = infer_topic_relations(query, top_topics)
+    if not relations:
+        relations = _cooccurrence_relations(posts, top_topics)
+
+    nodes: List[Dict[str, Any]] = [
+        {"id": topic, "label": topic, "weight": topic_weight[topic], "group": "topic"}
+        for topic in top_topics
+    ]
+
+    edges: List[Dict[str, Any]] = [
+        {
+            "id": f"e_{i}",
+            "source": rel["source"],
+            "target": rel["target"],
+            "weight": rel["weight"],
+            "relation": rel.get("relation", ""),
+        }
+        for i, rel in enumerate(relations)
+    ]
+
+    return {"nodes": nodes, "edges": edges}
+
+
 def run_llm_aggregate(
     query: str,
     texts: List[str],
@@ -32,43 +130,25 @@ def run_llm_aggregate(
 ) -> Dict[str, Any]:
     """
     Retorna estructura para el frontend:
-      - wordcloud: [{word, weight}, ...]
-      - graph: {nodes:[...], edges:[...]}
+      - wordcloud: [{word, weight}, ...]  (ponderado por relevance_score del LLM)
+      - graph: {nodes:[...], edges:[...]}  (temas de SO <-> categorías del LLM)
       - summary: string
-      - posts: [{title, url, source, score, date, author}]
+      - posts: [{title, url, source, score, date, author, relevance_score, tag}]
     """
-    base = [w for w in query.lower().split() if w.strip()]
-    if not base:
-        base = ["dolencia"]
+    posts = posts or []
 
-    wordcloud: List[Dict[str, Any]] = []
-    for i, w in enumerate(base):
-        wordcloud.append({"word": w, "weight": 10 + i * 3})
-    for i in range(6):
-        wordcloud.append({"word": f"tema{i+1}", "weight": 7 - i * 0.7})
-
-    nodes: List[Dict[str, Any]] = []
-    edges: List[Dict[str, Any]] = []
-    for i in range(len(base)):
-        nodes.append({"id": f"topic_{i}", "label": base[i]})
-    for j in range(5):
-        nodes.append({"id": f"source_{j}", "label": f"fuente{j+1}"})
-
-    topic_count = len(base)
-    for i in range(topic_count):
-        for j in range(5):
-            edges.append({
-                "id": f"e_{i}_{j}",
-                "source": f"topic_{i}",
-                "target": f"source_{j}",
-                "weight": 1 + (i + j) % 4,
-            })
+    if posts:
+        top_categories = Counter(p.get("tag") or "Sin clasificar" for p in posts).most_common(3)
+        categories_str = ", ".join(f"{c} ({n})" for c, n in top_categories)
+        summary = f"{len(posts)} resultados para \"{query}\". Categorías principales: {categories_str}."
+    else:
+        summary = f"Sin resultados para \"{query}\"."
 
     return {
-        "summary": f"Resumen MVP para: {query}",
-        "wordcloud": wordcloud,
-        "graph": {"nodes": nodes, "edges": edges},
-        "posts": posts or [],
+        "summary": summary,
+        "wordcloud": build_wordcloud(posts),
+        "graph": build_graph(query, posts),
+        "posts": posts,
     }
 
 
@@ -105,8 +185,11 @@ def worker_loop():
                 texts = extracted.get("corpus", [])
                 emit(job_id, "scrape", 60, f"✅ {len(real_posts)} resultados obtenidos")
 
-            emit(job_id, "llm", 70, "Procesando y generando resultados...")
-            time.sleep(1.0)
+            if real_posts:
+                emit(job_id, "llm", 70, "Analizando relevancia con IA...")
+                real_posts = annotate_posts(query, real_posts)
+                emit(job_id, "llm", 85, f"✅ {len(real_posts)} posts analizados")
+                emit(job_id, "llm", 90, "Construyendo grafo de relaciones semánticas...")
 
             result = run_llm_aggregate(
                 query=query,
