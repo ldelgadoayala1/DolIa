@@ -29,25 +29,6 @@ const COLUMNS: { key: SortKey; label: string; numeric?: boolean }[] = [
   { key: "author",         label: "Autor" },
 ];
 
-function ExternalLinkIcon() {
-  return (
-    <svg
-      viewBox="0 0 24 24"
-      width="15"
-      height="15"
-      fill="none"
-      stroke="currentColor"
-      strokeWidth="2"
-      strokeLinecap="round"
-      strokeLinejoin="round"
-    >
-      <path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6" />
-      <polyline points="15 3 21 3 21 9" />
-      <line x1="10" y1="14" x2="21" y2="3" />
-    </svg>
-  );
-}
-
 export default function DataTable({ posts }: Props) {
   const [sortKey, setSortKey] = useState<SortKey>("relevanceScore");
   const [sortDir, setSortDir] = useState<SortDir>("desc");
@@ -170,7 +151,6 @@ export default function DataTable({ posts }: Props) {
                     </span>
                   </th>
                 ))}
-                <th>Enlace</th>
               </tr>
             </thead>
             <tbody>
@@ -197,22 +177,6 @@ export default function DataTable({ posts }: Props) {
                   <td>{post.tag}</td>
                   <td>{post.date}</td>
                   <td>{post.author}</td>
-                  <td>
-                    {post.url && post.url !== "#" ? (
-                      <a
-                        className="data-table-link-icon"
-                        href={post.url}
-                        target="_blank"
-                        rel="noreferrer"
-                        title={post.url}
-                        aria-label={`Abrir: ${post.title}`}
-                      >
-                        <ExternalLinkIcon />
-                      </a>
-                    ) : (
-                      "-"
-                    )}
-                  </td>
                 </tr>
               ))}
             </tbody>
