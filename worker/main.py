@@ -183,36 +183,41 @@ def worker_loop():
                 extracted = extract_full_data(query, max_results=max_results)
                 real_posts = extracted.get("posts", [])
                 texts = extracted.get("corpus", [])
-                emit(job_id, "scraping", 50, f"✅ {len(real_posts)} resultados obtenidos",
-                     data={"count": len(real_posts)})
 
-            emit(job_id, "cleaning", 60, "Limpiando y normalizando datos...")
-            seen_urls: set = set()
-            cleaned_posts: List[Dict[str, Any]] = []
-            for post in real_posts:
-                url = post.get("url")
-                if url in seen_urls or not (post.get("title") or "").strip():
-                    continue
-                seen_urls.add(url)
-                cleaned_posts.append(post)
-            real_posts = cleaned_posts
-            emit(job_id, "cleaning", 65, f"✅ {len(real_posts)} posts únicos tras limpieza",
-                 data={"count": len(real_posts)})
+                seen_urls: set = set()
+                deduped_posts: List[Dict[str, Any]] = []
+                for post in real_posts:
+                    url = post.get("url")
+                    if url in seen_urls or not (post.get("title") or "").strip():
+                        continue
+                    seen_urls.add(url)
+                    deduped_posts.append(post)
+                real_posts = deduped_posts
+
+                emit(job_id, "scraping", 45, f"✅ {len(real_posts)} resultados obtenidos",
+                     data={"count": len(real_posts)})
 
             if real_posts:
-                emit(job_id, "classifying", 75, "Analizando relevancia con IA...")
+                emit(job_id, "classifying", 55,
+                     "Analizando relevancia y filtrando contenido inapropiado con IA...")
                 real_posts = annotate_posts(query, real_posts)
-                emit(job_id, "classifying", 85, f"✅ {len(real_posts)} posts analizados",
-                     data={"count": len(real_posts)})
 
-            emit(job_id, "building", 92, "Construyendo grafo de relaciones semánticas...")
+                flagged_count = sum(1 for p in real_posts if p.get("flagged"))
+                real_posts = [p for p in real_posts if not p.get("flagged")]
+
+                status = f"✅ {len(real_posts)} posts analizados"
+                if flagged_count:
+                    status += f" ({flagged_count} descartados por contenido inapropiado)"
+                emit(job_id, "classifying", 75, status, data={"count": len(real_posts)})
+
+            emit(job_id, "building", 85, "Construyendo grafo de relaciones semánticas...")
             result = run_llm_aggregate(
                 query=query,
                 texts=texts,
                 posts=real_posts,
                 max_results=max_results,
             )
-            emit(job_id, "building", 97, "Generando nube de palabras y gráficos...",
+            emit(job_id, "building", 95, "Generando nube de palabras y gráficos...",
                  data={"count": len(real_posts)})
 
             r.set(f"job:{job_id}:result", json.dumps(result), ex=600)

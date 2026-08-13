@@ -51,7 +51,9 @@ Para cada post, evalúa:
    de 0 a 100 (0 = nada relevante, 100 = totalmente relevante).
 2. tag: una etiqueta semántica que describa el tipo de contenido del post.
    Debe ser exactamente una de estas opciones: {tags_list}.
-3. justification: una frase corta explicando el score y el tag asignados.
+3. flagged: true si el título o el extracto contienen lenguaje ofensivo,
+   vulgar, discriminatorio o inapropiado; false en caso contrario.
+4. justification: una frase corta explicando el score y el tag asignados.
 
 POSTS:
 {formatted_posts}
@@ -66,6 +68,7 @@ FORMATO JSON ESPERADO:
             "index": 0,
             "relevance_score": 85,
             "tag": "Solucion",
+            "flagged": false,
             "justification": "Explica directamente cómo resolver el problema buscado."
         }},
         "repetir para cada post del lote, usando su índice..."

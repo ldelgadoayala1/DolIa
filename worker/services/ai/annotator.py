@@ -11,9 +11,10 @@ def annotate_posts(
     batch_size: int = 15,
 ) -> List[Dict[str, Any]]:
     """
-    Agrega relevance_score y tag a cada post, evaluando relevancia respecto
-    a `query` vía LLM (por lotes). Si un lote falla, esos posts quedan con
-    valores por defecto en vez de interrumpir el job completo.
+    Agrega relevance_score, tag y flagged (moderación de contenido) a cada
+    post, evaluando respecto a `query` vía LLM (por lotes). Si un lote falla,
+    esos posts quedan con valores por defecto en vez de interrumpir el job
+    completo.
     """
     for start in range(0, len(posts), batch_size):
         batch = posts[start:start + batch_size]
@@ -31,8 +32,10 @@ def annotate_posts(
             if annotation:
                 post["relevance_score"] = annotation["relevance_score"]
                 post["tag"] = annotation["tag"]
+                post["flagged"] = annotation["flagged"]
             else:
                 post.setdefault("relevance_score", None)
                 post.setdefault("tag", DEFAULT_TAG)
+                post.setdefault("flagged", False)
 
     return posts

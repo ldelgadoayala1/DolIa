@@ -55,6 +55,14 @@ def normalize_annotations(raw: Dict[str, Any], batch_size: int) -> Dict[int, Dic
         if tag not in TAGS:
             tag = DEFAULT_TAG
 
+        flagged = bool(
+            item.get("flagged")
+            or item.get("is_flagged")
+            or item.get("inappropriate")
+            or item.get("profanity")
+            or False
+        )
+
         justification = (
             item.get("justification")
             or item.get("feedback")
@@ -65,6 +73,7 @@ def normalize_annotations(raw: Dict[str, Any], batch_size: int) -> Dict[int, Dic
         normalized[index] = {
             "relevance_score": score,
             "tag": tag,
+            "flagged": flagged,
             "justification": justification,
         }
 
