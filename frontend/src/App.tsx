@@ -4,6 +4,8 @@ import "../css/index.css";
 import "../css/App.css";
 import WordCloud from "./components/WordCloud";
 import GraphView from "./components/GraphView";
+import SearchPipeline from "./components/SearchPipeline";
+import DataTable, { type PostRow } from "./components/DataTable";
 
 // ✅ Tipos alineados con lo que devuelve el backend
 type WordItem = { text: string; value: number };
@@ -23,33 +25,11 @@ type GraphEdge = {
   relation?: string;
 };
 
-type PostRow = {
-  title: string;
-  url: string;
-  source: string;
-  score: number;
-  date: string;
-  author: string;
-  relevanceScore: number | null;
-  tag: string;
-};
-
 type FinalResult = {
   summary?: string;
   wordcloud?: WordItem[];
   graph?: { nodes: GraphNode[]; edges: GraphEdge[] };
   posts?: PostRow[];
-};
-
-const STAGES = ["scraping", "cleaning", "classifying", "building", "finalize"];
-
-const STAGE_LABELS: Record<string, string> = {
-  scraping:    "🔍 Scraping",
-  cleaning:    "🧹 Limpieza",
-  classifying: "🤖 IA",
-  building:    "📊 Gráficos",
-  finalize:    "✅ Listo",
-  error:       "❌ Error",
 };
 
 const SOURCE_ICONS: Record<string, string> = {
@@ -59,7 +39,7 @@ const SOURCE_ICONS: Record<string, string> = {
 const AVAILABLE_SOURCES = ["stackoverflow"];
 
 export default function App() {
-  const [query,      setQuery]      = useState<string>("resfriado común");
+  const [query,      setQuery]      = useState<string>("");
   const [maxResults, setMaxResults] = useState<number>(30);
   const [sources,    setSources]    = useState<string[]>(["stackoverflow"]);
   const [jobId,      setJobId]      = useState<string>("");
@@ -69,7 +49,9 @@ export default function App() {
   const [stage,      setStage]      = useState<string>("");
   const [result,     setResult]     = useState<FinalResult | null>(null);
   const [loading,    setLoading]    = useState<boolean>(false);
+  const [hasError,   setHasError]   = useState<boolean>(false);
   const [showDebug,  setShowDebug]  = useState<boolean>(false);
+  const [stageCounts, setStageCounts] = useState<Record<string, number>>({});
 
   const apiSearchUrl  = "http://localhost:8000/search";
   const apiEventsBase = "http://localhost:8000/events";
@@ -83,6 +65,8 @@ export default function App() {
     setEvents([]);
     setProgress(0);
     setStage("");
+    setHasError(false);
+    setStageCounts({});
     setLoading(true);
     setStatus("Enviando búsqueda...");
 
@@ -131,6 +115,13 @@ export default function App() {
           setStage(payload.stage ?? "finalize");
           setProgress(payload.progress ?? 100);
           setStatus(payload.status ?? "Completado");
+
+          if (Array.isArray(payload.data?.posts)) {
+            setStageCounts((prev) => ({
+              ...prev,
+              finalize: payload.data.posts.length,
+            }));
+          }
 
           // ✅ Normalizar datos del resultado
           if (payload.data) {
@@ -190,7 +181,7 @@ export default function App() {
         }
 
         if (payload.type === "error") {
-          setStage("error");
+          setHasError(true);
           setProgress(100);
           setStatus(payload.status ?? "Error en el proceso");
           setLoading(false);
@@ -201,6 +192,11 @@ export default function App() {
         setStage(payload.stage    ?? "");
         setProgress(payload.progress ?? 0);
         setStatus(payload.status  ?? "");
+
+        if (typeof payload.data?.count === "number" && payload.stage) {
+          const stageKey = payload.stage;
+          setStageCounts((prev) => ({ ...prev, [stageKey]: payload.data.count }));
+        }
 
       } catch (_) { /* ignorar parse errors */ }
     };
@@ -218,16 +214,7 @@ export default function App() {
   const wordcloud = result?.wordcloud ?? [];
   const graph     = result?.graph;
   const isDone    = stage === "finalize" || (progress === 100 && !loading);
-  const isError   = stage === "error";
-
-  const getStageState = (s: string) => {
-    if (isError && s === "error") return "error";
-    const idx  = STAGES.indexOf(stage);
-    const sIdx = STAGES.indexOf(s);
-    if (sIdx < idx)  return "done";
-    if (sIdx === idx) return "active";
-    return "";
-  };
+  const isError   = hasError;
 
   // ── Render ────────────────────────────────────────────────────
   return (
@@ -262,7 +249,7 @@ export default function App() {
                 className="form-input"
                 value={query}
                 onChange={(e) => setQuery(e.target.value)}
-                placeholder="ej: resfriado común, dolor de cabeza..."
+                placeholder="Ej: SQL injection"
                 onKeyDown={(e) => e.key === "Enter" && startSearch()}
               />
             </div>
@@ -330,29 +317,17 @@ export default function App() {
             </button>
           </div>
 
-          {/* ── Pipeline de etapas ── */}
+          {/* ── Pipeline + Estado (animación de carga unificada) ── */}
           <div className="sidebar-card">
-            <div className="sidebar-card-title">⚙️ Pipeline</div>
-            <div className="pipeline-steps">
-              {STAGES.filter(s => s !== "error").map((s) => (
-                <div key={s} className={`pipeline-step ${getStageState(s)}`}>
-                  <div className="step-dot" />
-                  <span>{STAGE_LABELS[s]}</span>
-                </div>
-              ))}
-            </div>
-          </div>
-
-          {/* ── Estado ── */}
-          <div className="sidebar-card">
-            <div className="sidebar-card-title">📡 Estado</div>
-            <div className="progress-bar-wrap">
-              <div
-                className="progress-bar-fill"
-                style={{ width: `${progress}%` }}
-              />
-            </div>
-            <p className="status-text">{status}</p>
+            <div className="sidebar-card-title">🚀 Progreso</div>
+            <SearchPipeline
+              stage={stage}
+              progress={progress}
+              status={status}
+              loading={loading}
+              isError={isError}
+              counts={stageCounts}
+            />
           </div>
         </aside>
 
@@ -380,44 +355,7 @@ export default function App() {
             <section className="result-card">
               <h2 className="result-card-title">📋 Resultados</h2>
               {result.posts.length > 0 ? (
-                <div className="data-table-wrap">
-                  <table className="data-table">
-                    <thead>
-                      <tr>
-                        <th>Título</th>
-                        <th>Enlace</th>
-                        <th>Fuente</th>
-                        <th>Score</th>
-                        <th>Relevancia</th>
-                        <th>Etiqueta</th>
-                        <th>Fecha</th>
-                        <th>Autor</th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {result.posts.map((post, index) => (
-                        <tr key={`${post.title}-${index}`}>
-                          <td>{post.title}</td>
-                          <td>
-                            {post.url && post.url !== "#" ? (
-                              <a href={post.url} target="_blank" rel="noreferrer">
-                                {post.url}
-                              </a>
-                            ) : (
-                              "-"
-                            )}
-                          </td>
-                          <td>{post.source}</td>
-                          <td>{post.score}</td>
-                          <td>{post.relevanceScore ?? "-"}</td>
-                          <td>{post.tag}</td>
-                          <td>{post.date}</td>
-                          <td>{post.author}</td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
+                <DataTable posts={result.posts} />
               ) : (
                 <p className="status-text">
                   No se encontraron resultados respecto a la búsqueda actual.
