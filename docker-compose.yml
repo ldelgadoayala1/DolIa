@@ -28,6 +28,7 @@ services:
       - "8000:8000"
     volumes:
       - ./config:/config:ro
+      - ./db:/app/db:ro
     restart: unless-stopped
 
   worker:
@@ -43,6 +44,7 @@ services:
       - api
     volumes:
       - ./config:/config:ro
+      - ./db:/app/db:ro
     restart: unless-stopped
 
   frontend:

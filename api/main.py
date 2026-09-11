@@ -10,9 +10,15 @@ from pydantic import BaseModel, Field
 from typing import Dict, List, Any
 
 from sse_queue import push_event, event_stream  # noqa: F401  (push_event lo usa el worker)
+from db import SearchQuery, get_session, init_db
 
 # ──────────────────────────────────────────────
 app = FastAPI(title="WebScrappingUNAB API")
+
+
+@app.on_event("startup")
+def on_startup() -> None:
+    init_db()
 
 app.add_middleware(
     CORSMiddleware,
@@ -64,6 +70,20 @@ def search(payload: SearchPayload) -> Dict[str, Any]:
 
     # Encolar para el worker (BRPOP en el otro extremo)
     r.rpush("jobs:queue", job_id)
+
+    # Historial en Postgres: best-effort, no debe tumbar la creación del job
+    # (Redis/SSE sigue siendo la vía crítica para que la búsqueda funcione).
+    try:
+        with get_session() as session:
+            session.add(SearchQuery(
+                id=job_id,
+                query=payload.query,
+                sources=payload.sources,
+                max_results=payload.max_results,
+                status="queued",
+            ))
+    except Exception as e:
+        print(f"[api] no se pudo registrar la búsqueda en la base de datos (job_id={job_id}): {e}")
 
     return {"job_id": job_id}
 

@@ -2,6 +2,7 @@ import os
 import re
 import json
 from collections import Counter, defaultdict
+from datetime import datetime, timezone
 from typing import Dict, Any, List
 
 import redis
@@ -10,6 +11,7 @@ from services.ai.annotator import annotate_posts
 from services.ai.relations import infer_topic_relations
 
 from sse_queue import push_event
+from db import JobLog, SearchQuery, get_session, init_db
 
 STOPWORDS = {
     "the", "a", "an", "is", "are", "was", "were", "in", "on", "at", "to", "for",
@@ -24,6 +26,28 @@ LOG_LEVEL = os.getenv("WORKER_LOG_LEVEL", "INFO")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
 
+def _persist_log(job_id: str, stage: str, level: str, message: str, data: Dict[str, Any] | None) -> None:
+    """Best-effort: un problema de DB no debe tumbar el pipeline (Redis/SSE sigue siendo la vía crítica)."""
+    try:
+        with get_session() as session:
+            session.add(JobLog(job_id=job_id, stage=stage, level=level, message=message, data=data))
+    except Exception as e:
+        print(f"[worker] no se pudo escribir log en DB (job_id={job_id}): {e}")
+
+
+def _update_query(job_id: str, **fields: Any) -> None:
+    """Actualiza campos de search_queries. Best-effort, igual que _persist_log."""
+    try:
+        with get_session() as session:
+            search_query = session.get(SearchQuery, job_id)
+            if search_query is None:
+                return
+            for key, value in fields.items():
+                setattr(search_query, key, value)
+    except Exception as e:
+        print(f"[worker] no se pudo actualizar search_queries (job_id={job_id}): {e}")
+
+
 def emit(job_id: str, stage: str, progress: int, status: str, type_: str = "progress", data: Dict[str, Any] | None = None):
     event = {
         "stage": stage,
@@ -34,6 +58,7 @@ def emit(job_id: str, stage: str, progress: int, status: str, type_: str = "prog
     if data is not None:
         event["data"] = data
     push_event(job_id, event)
+    _persist_log(job_id, stage, "ERROR" if type_ == "error" else "INFO", status, data)
 
 
 def _relevance(post: Dict[str, Any]) -> float:
@@ -155,6 +180,7 @@ def run_llm_aggregate(
 def worker_loop():
     r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
     print(f"[worker] starting (log_level={LOG_LEVEL}) redis={REDIS_URL}")
+    init_db()
 
     while True:
         job_item = r.brpop("jobs:queue", timeout=5)
@@ -166,6 +192,12 @@ def worker_loop():
             payload_raw = r.get(f"job:{job_id}:payload")
             if not payload_raw:
                 emit(job_id, "load_payload", 100, "Payload no encontrado", type_="error")
+                _update_query(
+                    job_id,
+                    status="error",
+                    error_message="Payload no encontrado en Redis (¿TTL expirado?)",
+                    completed_at=datetime.now(timezone.utc),
+                )
                 continue
 
             payload = json.loads(payload_raw)
@@ -173,6 +205,7 @@ def worker_loop():
             sources = payload.get("sources", ["stackoverflow"])
             max_results = int(payload.get("max_results", 30))
 
+            _update_query(job_id, status="running")
             emit(job_id, "scraping", 5, "Inicializando búsqueda...")
 
             texts: List[str] = []
@@ -223,11 +256,24 @@ def worker_loop():
             r.set(f"job:{job_id}:result", json.dumps(result), ex=600)
             r.set(f"job:{job_id}:status", "done", ex=600)
 
+            _update_query(
+                job_id,
+                status="done",
+                summary=result.get("summary"),
+                posts_count=len(real_posts),
+                completed_at=datetime.now(timezone.utc),
+            )
             emit(job_id, "finalize", 100, "Completado", type_="done", data=result)
 
         except Exception as e:
             msg = str(e)
             emit(job_id, "error", 100, "Error en el worker", type_="error", data={"message": msg})
+            _update_query(
+                job_id,
+                status="error",
+                error_message=msg,
+                completed_at=datetime.now(timezone.utc),
+            )
             print(f"[worker] error job_id={job_id}: {msg}")
 
 
