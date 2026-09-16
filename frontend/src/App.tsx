@@ -1,5 +1,5 @@
 // frontend/src/App.tsx
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useState } from "react";
 import "../css/index.css";
 import "../css/App.css";
 import WordCloud from "./components/WordCloud";
@@ -32,16 +32,13 @@ type FinalResult = {
   posts?: PostRow[];
 };
 
-const SOURCE_ICONS: Record<string, string> = {
-  stackoverflow: "🟡",
-};
-
-const AVAILABLE_SOURCES = ["stackoverflow"];
+// Fuentes que la página tiene implementadas — la búsqueda siempre consulta
+// todas, sin selección manual del usuario.
+const SOURCES = ["stackoverflow", "github"];
 
 export default function App() {
   const [query,      setQuery]      = useState<string>("");
   const [maxResults, setMaxResults] = useState<number>(30);
-  const [sources,    setSources]    = useState<string[]>(["stackoverflow"]);
   const [jobId,      setJobId]      = useState<string>("");
   const [events,     setEvents]     = useState<any[]>([]);
   const [progress,   setProgress]   = useState<number>(0);
@@ -56,7 +53,6 @@ export default function App() {
   const apiSearchUrl  = "http://localhost:8000/search";
   const apiEventsBase = "http://localhost:8000/events";
 
-  const normalizedSources = useMemo(() => sources, [sources]);
   const rangePct = `${((maxResults - 1) / 199) * 100}%`;
 
   // ── Iniciar búsqueda ──────────────────────────────────────────
@@ -76,7 +72,7 @@ export default function App() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           query,
-          sources:           normalizedSources,
+          sources:           SOURCES,
           max_results:       maxResults,
           include_graph:     true,
           include_wordcloud: true,
@@ -273,45 +269,11 @@ export default function App() {
               />
             </div>
 
-            {/* ✅ Fuentes — Solo StackOverflow */}
-            <div className="form-group">
-              <label className="form-label">Fuentes</label>
-              <div className="sources-grid">
-                {AVAILABLE_SOURCES.map((s) => {
-                  const checked = sources.includes(s);
-                  return (
-                    <label
-                      key={s}
-                      className={`source-item ${checked ? "active" : ""}`}
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() =>
-                          setSources((prev) =>
-                            prev.includes(s)
-                              ? prev.filter((x) => x !== s)
-                              : [...prev, s]
-                          )
-                        }
-                      />
-                      <span>{SOURCE_ICONS[s]}</span>
-                      <span style={{ textTransform: "capitalize" }}>{s}</span>
-                    </label>
-                  );
-                })}
-              </div>
-              {/* ✅ Nota futura */}
-              <p style={{ fontSize: "0.7rem", color: "var(--text-muted)", marginTop: "0.4rem" }}>
-                🔜 Más fuentes próximamente
-              </p>
-            </div>
-
             {/* Botón buscar */}
             <button
               className="btn-search"
               onClick={startSearch}
-              disabled={loading || sources.length === 0}
+              disabled={loading}
             >
               {loading ? "⏳ Buscando..." : "🔍 Buscar"}
             </button>
@@ -370,7 +332,7 @@ export default function App() {
               <div className="empty-icon">🔬</div>
               <h3>Ingresa una dolencia para comenzar</h3>
               <p>
-                El sistema analizará publicaciones de StackOverflow
+                El sistema analizará publicaciones de StackOverflow y GitHub
                 y generará visualizaciones con IA.
               </p>
             </div>

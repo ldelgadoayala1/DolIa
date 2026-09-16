@@ -32,8 +32,8 @@ no tiene ni el historial en Postgres ni este archivo.
 ### Lo que funciona hoy
 - Pipeline de 4 etapas end-to-end vía SSE (`/search`, `/events`, `/job_result`)
   con scraping funcional de **StackOverflow y GitHub Issues** (dos fuentes
-  activas, seleccionables desde el frontend; se pueden combinar en la misma
-  búsqueda).
+  activas). El frontend ya no deja elegir fuente — cada búsqueda consulta
+  automáticamente todas las implementadas (ver más abajo).
 - **Registro de adaptadores de fuentes** (`worker/services/adapters/`, ver
   `INSTRUCCIONES_IA.md` sección 3.1-3.2): `worker/main.py` ya no tiene un `if
   "stackoverflow" in sources` hardcodeado — itera `payload.sources`, busca cada
@@ -88,7 +88,12 @@ no tiene ni el historial en Postgres ni este archivo.
   job `error` con `error_message` y log `level=ERROR` en `job_logs`.
 - Deduplicación de posts por URL en `worker/main.py`.
 - Frontend con tabla de resultados, nube de palabras (ponderada por
-  `relevance_score`) y grafo, con estilos de marca UNAB aplicados.
+  `relevance_score`) y grafo, con estilos de marca UNAB aplicados. **Sin
+  selector de fuentes**: se eliminó el checkbox manual (`AVAILABLE_SOURCES`/
+  `SOURCE_ICONS` en `App.tsx`) — el frontend siempre manda todas las fuentes
+  implementadas (constante `SOURCES` en `App.tsx`, hoy `["stackoverflow",
+  "github"]`) en cada búsqueda. Al agregar un adaptador nuevo hay que sumarlo
+  también a esa constante para que se consulte automáticamente.
 - **Historial de búsquedas y logging estructurado en Postgres** (paquete
   `db/`, rama `feature/db-search-history-logging`): `POST /search` crea una
   fila en `search_queries` (query, sources, max_results, status="queued")
@@ -236,8 +241,9 @@ adaptadores que hacen requests HTTP a terceros.
    (`worker/services/adapters/github_adapter.py`): módulo scraper propio +
    adaptador que normaliza + alta en `SOURCE_REGISTRY` + fila `active` en
    `db/seed.py` (recordar correr `python -m db` para que el seed se aplique) +
-   habilitar la fuente en `AVAILABLE_SOURCES`/`SOURCE_ICONS` del frontend
-   (`frontend/src/App.tsx`). Una fuente por cambio, como pide
+   sumarla a la constante `SOURCES` del frontend (`frontend/src/App.tsx`) para
+   que se consulte automáticamente (ya no hay selector manual). Una fuente
+   por cambio, como pide
    `INSTRUCCIONES_IA.md` sección 5 (Fase 2).
 2. **HU-05 — exponer historial/proveedores (rama `feature/db-search-history-logging`):**
    la persistencia ya está conectada y probada (ver "Lo que funciona hoy").
