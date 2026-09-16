@@ -32,7 +32,7 @@ def build_annotation_prompt(query: str, posts_batch: List[Dict[str, Any]]) -> st
         f"""
 Post {i}:
 Título: {post.get("title", "")}
-Extracto: {post.get("body_preview", "")}
+Extracto: {post.get("content", "")}
 """
         for i, post in enumerate(posts_batch)
     )

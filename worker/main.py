@@ -6,7 +6,7 @@ from datetime import datetime, timezone
 from typing import Dict, Any, List
 
 import redis
-from services.stackoverflow_scraper.stackoverflow_scraper_service import extract_full_data
+from services.adapters.registry import get_adapter
 from services.ai.annotator import annotate_posts
 from services.ai.relations import infer_topic_relations
 
@@ -149,7 +149,6 @@ def build_graph(query: str, posts: List[Dict[str, Any]], max_topics: int = 15) -
 
 def run_llm_aggregate(
     query: str,
-    texts: List[str],
     max_results: int = 10,
     posts: List[Dict[str, Any]] | None = None,
 ) -> Dict[str, Any]:
@@ -208,27 +207,45 @@ def worker_loop():
             _update_query(job_id, status="running")
             emit(job_id, "scraping", 5, "Inicializando búsqueda...")
 
-            texts: List[str] = []
+            active_adapters = []
+            for source_name in sources:
+                adapter = get_adapter(source_name)
+                if adapter is None:
+                    emit(job_id, "scraping", 10, f"Fuente desconocida: {source_name}",
+                         data={"source": source_name})
+                    continue
+                active_adapters.append(adapter)
+
+            # Repartir max_results entre las fuentes activas en vez de pedirle
+            # max_results completo a cada una — si no, el volumen total (y el
+            # trabajo de clasificación por IA) crece multiplicado por la
+            # cantidad de fuentes en vez de mantenerse acotado a max_results.
+            per_source_limit = -(-max_results // len(active_adapters)) if active_adapters else max_results
+
             real_posts: List[Dict[str, Any]] = []
 
-            if "stackoverflow" in sources:
-                emit(job_id, "scraping", 20, "Consultando StackOverflow API...")
-                extracted = extract_full_data(query, max_results=max_results)
-                real_posts = extracted.get("posts", [])
-                texts = extracted.get("corpus", [])
+            for adapter in active_adapters:
+                emit(job_id, "scraping", 20, f"Consultando {adapter.name}...",
+                     data={"source": adapter.name})
+                try:
+                    real_posts.extend(adapter.search(query, per_source_limit))
+                except Exception as e:
+                    emit(job_id, "scraping", 20, f"Fuente {adapter.name} falló: {e}",
+                         data={"source": adapter.name})
+                    print(f"[worker] fuente {adapter.name} falló job_id={job_id}: {e}")
 
-                seen_urls: set = set()
-                deduped_posts: List[Dict[str, Any]] = []
-                for post in real_posts:
-                    url = post.get("url")
-                    if url in seen_urls or not (post.get("title") or "").strip():
-                        continue
-                    seen_urls.add(url)
-                    deduped_posts.append(post)
-                real_posts = deduped_posts
+            seen_urls: set = set()
+            deduped_posts: List[Dict[str, Any]] = []
+            for post in real_posts:
+                url = post.get("url")
+                if url in seen_urls or not (post.get("title") or "").strip():
+                    continue
+                seen_urls.add(url)
+                deduped_posts.append(post)
+            real_posts = deduped_posts
 
-                emit(job_id, "scraping", 45, f"✅ {len(real_posts)} resultados obtenidos",
-                     data={"count": len(real_posts)})
+            emit(job_id, "scraping", 45, f"✅ {len(real_posts)} resultados obtenidos",
+                 data={"count": len(real_posts)})
 
             if real_posts:
                 emit(job_id, "classifying", 55,
@@ -238,6 +255,14 @@ def worker_loop():
                 flagged_count = sum(1 for p in real_posts if p.get("flagged"))
                 real_posts = [p for p in real_posts if not p.get("flagged")]
 
+                # Con varias fuentes activas puede haber más candidatos que
+                # max_results (ej. una fuente entregó de más antes de dedupe).
+                # Se ordena por relevance_score (ya calculado por la IA) y se
+                # corta a max_results — el usuario pidió un total, no un total
+                # por fuente.
+                real_posts.sort(key=_relevance, reverse=True)
+                real_posts = real_posts[:max_results]
+
                 status = f"✅ {len(real_posts)} posts analizados"
                 if flagged_count:
                     status += f" ({flagged_count} descartados por contenido inapropiado)"
@@ -246,7 +271,6 @@ def worker_loop():
             emit(job_id, "building", 85, "Construyendo grafo de relaciones semánticas...")
             result = run_llm_aggregate(
                 query=query,
-                texts=texts,
                 posts=real_posts,
                 max_results=max_results,
             )

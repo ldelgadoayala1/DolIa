@@ -19,10 +19,10 @@ PROVIDERS = [
     dict(
         slug="github",
         display_name="GitHub Issues",
-        status="pending",
-        description="HU-03: issues/discusiones de GitHub como fuente complementaria. Aún no implementado.",
-        rate_limit_info="5000 req/hora autenticado, 60 req/hora sin autenticar.",
-        requires_auth=True,
+        status="active",
+        description="HU-03: issues de GitHub (excluye pull requests) vía la Search API pública.",
+        rate_limit_info="Search API: 10 req/min sin auth, 30 req/min con GITHUB_TOKEN (opcional).",
+        requires_auth=False,
     ),
     dict(
         slug="hackernews",
