@@ -27,8 +27,8 @@ PROVIDERS = [
     dict(
         slug="hackernews",
         display_name="Hacker News",
-        status="pending",
-        description="HU-04: API pública de Hacker News (Firebase). Aún no implementado.",
+        status="active",
+        description="HU-04: stories de Hacker News vía la API pública de búsqueda de Algolia.",
         rate_limit_info="Sin límite documentado; API pública sin autenticación.",
         requires_auth=False,
     ),

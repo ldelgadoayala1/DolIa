@@ -15,7 +15,7 @@ desactualizado (no dejes que se pudra).
 > código. Si el cambio no altera nada de lo documentado aquí, no hace falta
 > tocarlo.
 
-## Resumen ejecutivo (2026-09-16)
+## Resumen ejecutivo (2026-09-17)
 
 **Arquitectura:** FastAPI (`api`) + worker Python + Redis (cola/caché en caliente,
 TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlchemy)
@@ -23,17 +23,19 @@ TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlch
 
 **Rama activa:** `feature/source-adapters` (creada desde `feature/db-search-history-logging`,
 para no perder la persistencia en Postgres). Implementa la Fase 1 de
-`INSTRUCCIONES_IA.md` (contratos internos de adaptadores por fuente, ver más
-abajo); `feature/db-search-history-logging` a su vez viene de
+`INSTRUCCIONES_IA.md` (contratos internos de adaptadores por fuente) y ya
+avanzó a la Fase 2 (fuentes públicas adicionales vía adaptadores: GitHub
+Issues y Hacker News, ver más abajo — falta RSS/Atom);
+`feature/db-search-history-logging` a su vez viene de
 `feature/elsevier-scopus-sciencedirect`, que no tenía commits propios (idéntica
 a `main`). **Ninguna de estas ramas está mergeada a `main` todavía** — `main`
 no tiene ni el historial en Postgres ni este archivo.
 
 ### Lo que funciona hoy
 - Pipeline de 4 etapas end-to-end vía SSE (`/search`, `/events`, `/job_result`)
-  con scraping funcional de **StackOverflow y GitHub Issues** (dos fuentes
-  activas). El frontend ya no deja elegir fuente — cada búsqueda consulta
-  automáticamente todas las implementadas (ver más abajo).
+  con scraping funcional de **StackOverflow, GitHub Issues y Hacker News**
+  (tres fuentes activas). El frontend ya no deja elegir fuente — cada
+  búsqueda consulta automáticamente todas las implementadas (ver más abajo).
 - **Registro de adaptadores de fuentes** (`worker/services/adapters/`, ver
   `INSTRUCCIONES_IA.md` sección 3.1-3.2): `worker/main.py` ya no tiene un `if
   "stackoverflow" in sources` hardcodeado — itera `payload.sources`, busca cada
@@ -43,14 +45,23 @@ no tiene ni el historial en Postgres ni este archivo.
   `score`, `tags`) antes de deduplicar/clasificar. Una fuente desconocida o que
   falla (excepción capturada por fuente) no cancela el job ni las demás
   fuentes — solo se emite un aviso y se sigue. `SOURCE_REGISTRY` tiene
-  `StackOverflowAdapter` y `GitHubAdapter` (este último envuelve
+  `StackOverflowAdapter`, `GitHubAdapter` (este último envuelve
   `worker/services/github_scraper/github_scraper_service.py`, que pega contra
   la Search API pública de GitHub con `is:issue` para excluir pull requests;
-  `GITHUB_TOKEN` es opcional, solo sube el rate limit de 10 a 30 req/min).
-  Verificado end-to-end contra Docker real: cada fuente por separado, ambas
-  combinadas (resultados mezclados en una sola tabla, criterio de aceptación
-  de `INSTRUCCIONES_IA.md` sección 8), y el caso de fuente desconocida en
-  `sources`.
+  `GITHUB_TOKEN` es opcional, solo sube el rate limit de 10 a 30 req/min) y
+  `HackerNewsAdapter` (envuelve
+  `worker/services/hackernews_scraper/hackernews_scraper_service.py`, que
+  pega contra la API pública de búsqueda de Algolia para HN —
+  `hn.algolia.com/api/v1/search` con `tags=story` para excluir comentarios—,
+  no la Firebase API oficial porque esa no soporta búsqueda por texto libre;
+  sin autenticación ni rate limit documentado). HN no tiene tags temáticos
+  como SO/GitHub, así que sus posts aportan `tags: []` — no rompen el grafo
+  ni la nube (que siguen funcionando con las demás fuentes), simplemente no
+  suman nodos propios al grafo cuando HN es la única fuente activa.
+  Verificado end-to-end contra Docker real: cada fuente por separado, las
+  tres combinadas (resultados mezclados en una sola tabla, criterio de
+  aceptación de `INSTRUCCIONES_IA.md` sección 8), y el caso de fuente
+  desconocida en `sources` (no cancela el job ni las fuentes válidas).
 - **Nota sobre el seed de proveedores:** `init_db()` (llamado al arrancar
   `api`/`worker`) solo crea las tablas — `seed_providers()` (el catálogo de
   `search_providers`) **no** corre automático, hay que ejecutarlo a mano
@@ -92,8 +103,9 @@ no tiene ni el historial en Postgres ni este archivo.
   selector de fuentes**: se eliminó el checkbox manual (`AVAILABLE_SOURCES`/
   `SOURCE_ICONS` en `App.tsx`) — el frontend siempre manda todas las fuentes
   implementadas (constante `SOURCES` en `App.tsx`, hoy `["stackoverflow",
-  "github"]`) en cada búsqueda. Al agregar un adaptador nuevo hay que sumarlo
-  también a esa constante para que se consulte automáticamente.
+  "github", "hackernews"]`) en cada búsqueda. Al agregar un adaptador nuevo
+  hay que sumarlo también a esa constante para que se consulte
+  automáticamente.
 - **Historial de búsquedas y logging estructurado en Postgres** (paquete
   `db/`, rama `feature/db-search-history-logging`): `POST /search` crea una
   fila en `search_queries` (query, sources, max_results, status="queued")
@@ -142,8 +154,10 @@ no tiene ni el historial en Postgres ni este archivo.
   30 req/min con `GITHUB_TOKEN` opcional) filtrando con `is:issue`, no el
   límite de 5000/h de la API general (esa cifra corresponde a otros
   endpoints, no a Search).
-- **Hacker News (HU-04):** priorizada como complemento liviano, API pública
-  sin autenticación. **Siguiente paso recomendado** (junto con RSS/Atom).
+- **Hacker News (HU-04):** ✅ implementado (`HackerNewsAdapter`, ver "Lo que
+  funciona hoy"). Usa la API pública de búsqueda de Algolia para HN
+  (`tags=story`, sin autenticación ni límite documentado), no la Firebase API
+  oficial (no soporta búsqueda por texto libre).
 
 ### Historial y observabilidad (ver `Historias_Usuario.csv`)
 - **Exponer historial de búsquedas y catálogo de proveedores (HU-05):**
@@ -159,6 +173,8 @@ api/       FastAPI: expone /health, /search, /events (SSE), /job_result
 worker/    Loop BRPOP sobre Redis; ejecuta el pipeline de 4 etapas
   services/adapters/                 contrato SourceAdapter + SOURCE_REGISTRY (ver "Lo que funciona hoy")
   services/stackoverflow_scraper/   scraper de StackOverflow (API pública StackExchange), envuelto por StackOverflowAdapter
+  services/github_scraper/          scraper de GitHub Issues (Search API pública), envuelto por GitHubAdapter
+  services/hackernews_scraper/      scraper de Hacker News (Algolia HN Search API), envuelto por HackerNewsAdapter
   services/ai/                      llm_client, prompt_builder, annotator, relations, response_parser
 db/        Paquete compartido (SQLAlchemy): modelos (search_queries, job_logs,
            search_providers) + conexión Postgres + seed de proveedores. Se
@@ -182,7 +198,7 @@ INSTRUCCIONES_IA.md      Guía de integración de adaptadores de fuentes (idea t
    por la cantidad de fuentes registradas en vez de mantenerse acotado a
    `max_results`. Posts normalizados de todas las fuentes se acumulan y
    dedupean por URL. Fuente desconocida o que falla → aviso y se sigue con
-   las demás (hoy `"stackoverflow"` y `"github"` registradas).
+   las demás (hoy `"stackoverflow"`, `"github"` y `"hackernews"` registradas).
 2. **classifying** — `annotate_posts`: relevancia + tag + moderación vía LLM
    por lotes de 15; se descartan los posts marcados `flagged`. Después se
    ordena por `relevance_score` (desc) y se corta a `max_results` — el total
@@ -236,26 +252,38 @@ adaptadores que hacen requests HTTP a terceros.
 
 ## Para la próxima sesión
 
-1. Implementar el siguiente adaptador (Hacker News o RSS/Atom, HU-04) siguiendo
-   el contrato `SourceAdapter` y el mismo patrón que `GitHubAdapter`
-   (`worker/services/adapters/github_adapter.py`): módulo scraper propio +
-   adaptador que normaliza + alta en `SOURCE_REGISTRY` + fila `active` en
-   `db/seed.py` (recordar correr `python -m db` para que el seed se aplique) +
-   sumarla a la constante `SOURCES` del frontend (`frontend/src/App.tsx`) para
-   que se consulte automáticamente (ya no hay selector manual). Una fuente
-   por cambio, como pide
-   `INSTRUCCIONES_IA.md` sección 5 (Fase 2).
-2. **HU-05 — exponer historial/proveedores (rama `feature/db-search-history-logging`):**
+1. Implementar el siguiente adaptador (RSS/Atom, único pendiente de la Fase 2
+   de `INSTRUCCIONES_IA.md` sección 5 — StackOverflow, GitHub y Hacker News ya
+   están) siguiendo el contrato `SourceAdapter` y el mismo patrón que
+   `HackerNewsAdapter`/`GitHubAdapter`: módulo scraper propio + adaptador que
+   normaliza + alta en `SOURCE_REGISTRY` + fila `active` en `db/seed.py`
+   (recordar correr `python -m db` para que el seed se aplique) + sumarla a la
+   constante `SOURCES` del frontend (`frontend/src/App.tsx`) para que se
+   consulte automáticamente (ya no hay selector manual). A diferencia de las
+   fuentes anteriores, RSS no tiene buscador propio — falta decidir si el
+   adaptador filtra localmente las entradas de una lista curada de feeds, o
+   si recibe feed URLs de otra forma (definir antes de implementar).
+2. **Bug preexistente detectado (no de esta sesión, pendiente de fix):** en
+   `api/main.py` (`POST /search`), `r.rpush("jobs:queue", job_id)` ocurre
+   *antes* de insertar la fila en `search_queries` (Postgres). El worker
+   puede desencolar el job y llamar a `emit()` (que escribe en `job_logs`)
+   antes de que esa fila exista, disparando un
+   `ForeignKeyViolation` best-effort (no tumba el pipeline, pero significa
+   que se pierden logs iniciales de esa corrida). Reproducido en esta sesión
+   con jobs de Hacker News, GitHub y StackOverflow por igual — no es
+   específico de ninguna fuente. Fix sugerido: mover el insert de
+   `SearchQuery` antes del `rpush`.
+3. **HU-05 — exponer historial/proveedores (rama `feature/db-search-history-logging`):**
    la persistencia ya está conectada y probada (ver "Lo que funciona hoy").
    Falta la capa de lectura: endpoints en la API (ej. `GET /search_history`,
    `GET /providers`) y la vista en el frontend. Evaluar también si conviene
    Alembic una vez el esquema empiece a cambiar más seguido (hoy
    `init_db()` con `create_all()` alcanza).
-3. Confirmar acceso institucional UNAB a Scopus/ScienceDirect antes de tocar
+4. Confirmar acceso institucional UNAB a Scopus/ScienceDirect antes de tocar
    HU-02 (Elsevier) — no vale la pena implementar el conector sin esa
    confirmación.
-4. Si se retoma X/Twitter (HU-01), verificar primero si ya se habilitó
+5. Si se retoma X/Twitter (HU-01), verificar primero si ya se habilitó
    billing en el X Developer Portal.
-5. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
+6. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
    contra el código — quedó desactualizado en los puntos de IA (ver nota en
    el resumen ejecutivo).
