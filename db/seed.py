@@ -33,6 +33,17 @@ PROVIDERS = [
         requires_auth=False,
     ),
     dict(
+        slug="rss",
+        display_name="RSS/Atom (Google News)",
+        status="active",
+        description=(
+            "Fase 2 de INSTRUCCIONES_IA.md: búsqueda de noticias vía el feed público "
+            "de Google News RSS (news.google.com/rss/search), sin lista curada de feeds."
+        ),
+        rate_limit_info="Sin límite documentado; endpoint público sin autenticación.",
+        requires_auth=False,
+    ),
+    dict(
         slug="elsevier_scopus",
         display_name="Elsevier / Scopus / ScienceDirect",
         status="pending",

@@ -25,7 +25,8 @@ TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlch
 para no perder la persistencia en Postgres). Implementa la Fase 1 de
 `INSTRUCCIONES_IA.md` (contratos internos de adaptadores por fuente) y ya
 avanzó a la Fase 2 (fuentes públicas adicionales vía adaptadores: GitHub
-Issues y Hacker News, ver más abajo — falta RSS/Atom);
+Issues, Hacker News y RSS/Atom, ver más abajo — de la Fase 2 (sección 5)
+todavía faltan Web/Jina Reader y V2EX público, en ese orden);
 `feature/db-search-history-logging` a su vez viene de
 `feature/elsevier-scopus-sciencedirect`, que no tenía commits propios (idéntica
 a `main`). **Ninguna de estas ramas está mergeada a `main` todavía** — `main`
@@ -33,9 +34,10 @@ no tiene ni el historial en Postgres ni este archivo.
 
 ### Lo que funciona hoy
 - Pipeline de 4 etapas end-to-end vía SSE (`/search`, `/events`, `/job_result`)
-  con scraping funcional de **StackOverflow, GitHub Issues y Hacker News**
-  (tres fuentes activas). El frontend ya no deja elegir fuente — cada
-  búsqueda consulta automáticamente todas las implementadas (ver más abajo).
+  con scraping funcional de **StackOverflow, GitHub Issues, Hacker News y
+  RSS/Atom (noticias vía Google News)** (cuatro fuentes activas). El frontend
+  ya no deja elegir fuente — cada búsqueda consulta automáticamente todas las
+  implementadas (ver más abajo).
 - **Registro de adaptadores de fuentes** (`worker/services/adapters/`, ver
   `INSTRUCCIONES_IA.md` sección 3.1-3.2): `worker/main.py` ya no tiene un `if
   "stackoverflow" in sources` hardcodeado — itera `payload.sources`, busca cada
@@ -54,14 +56,23 @@ no tiene ni el historial en Postgres ni este archivo.
   pega contra la API pública de búsqueda de Algolia para HN —
   `hn.algolia.com/api/v1/search` con `tags=story` para excluir comentarios—,
   no la Firebase API oficial porque esa no soporta búsqueda por texto libre;
-  sin autenticación ni rate limit documentado). HN no tiene tags temáticos
-  como SO/GitHub, así que sus posts aportan `tags: []` — no rompen el grafo
-  ni la nube (que siguen funcionando con las demás fuentes), simplemente no
-  suman nodos propios al grafo cuando HN es la única fuente activa.
-  Verificado end-to-end contra Docker real: cada fuente por separado, las
-  tres combinadas (resultados mezclados en una sola tabla, criterio de
-  aceptación de `INSTRUCCIONES_IA.md` sección 8), y el caso de fuente
-  desconocida en `sources` (no cancela el job ni las fuentes válidas).
+  sin autenticación ni rate limit documentado) y `RSSAdapter` (envuelve
+  `worker/services/rss_scraper/rss_scraper_service.py`, que pega contra el
+  feed público de búsqueda de Google News —
+  `news.google.com/rss/search?q=...`—, no una lista curada de feeds fijos:
+  este endpoint sí acepta la query de texto libre del usuario y devuelve
+  RSS 2.0, así que mantiene el mismo contrato de búsqueda real que las demás
+  fuentes en vez de requerir mantener/filtrar una lista de feeds a mano;
+  reutiliza `beautifulsoup4`/`lxml`, ya en `worker/requirements.txt`, para
+  parsear el XML — no se agregó ninguna dependencia nueva). Tanto HN como
+  RSS no tienen tags temáticos como SO/GitHub, así que sus posts aportan
+  `tags: []` — no rompen el grafo ni la nube (que siguen funcionando con las
+  demás fuentes), simplemente no suman nodos propios al grafo cuando son la
+  única fuente activa. Verificado end-to-end contra Docker real: cada fuente
+  por separado, las cuatro combinadas (resultados mezclados en una sola
+  tabla, criterio de aceptación de `INSTRUCCIONES_IA.md` sección 8), y el
+  caso de fuente desconocida en `sources` (no cancela el job ni las fuentes
+  válidas).
 - **Nota sobre el seed de proveedores:** `init_db()` (llamado al arrancar
   `api`/`worker`) solo crea las tablas — `seed_providers()` (el catálogo de
   `search_providers`) **no** corre automático, hay que ejecutarlo a mano
@@ -103,8 +114,8 @@ no tiene ni el historial en Postgres ni este archivo.
   selector de fuentes**: se eliminó el checkbox manual (`AVAILABLE_SOURCES`/
   `SOURCE_ICONS` en `App.tsx`) — el frontend siempre manda todas las fuentes
   implementadas (constante `SOURCES` en `App.tsx`, hoy `["stackoverflow",
-  "github", "hackernews"]`) en cada búsqueda. Al agregar un adaptador nuevo
-  hay que sumarlo también a esa constante para que se consulte
+  "github", "hackernews", "rss"]`) en cada búsqueda. Al agregar un adaptador
+  nuevo hay que sumarlo también a esa constante para que se consulte
   automáticamente.
 - **Historial de búsquedas y logging estructurado en Postgres** (paquete
   `db/`, rama `feature/db-search-history-logging`): `POST /search` crea una
@@ -158,6 +169,12 @@ no tiene ni el historial en Postgres ni este archivo.
   funciona hoy"). Usa la API pública de búsqueda de Algolia para HN
   (`tags=story`, sin autenticación ni límite documentado), no la Firebase API
   oficial (no soporta búsqueda por texto libre).
+- **RSS/Atom (Fase 2 de `INSTRUCCIONES_IA.md`, sin HU asociada en
+  `Historias_Usuario.csv`):** ✅ implementado (`RSSAdapter`, ver "Lo que
+  funciona hoy"). Decisión de diseño (consultada con el usuario esta
+  sesión): en vez de una lista curada de feeds + filtro local de texto, usa
+  el feed de búsqueda de Google News (`news.google.com/rss/search?q=...`),
+  que sí soporta query de texto libre igual que las demás fuentes.
 
 ### Historial y observabilidad (ver `Historias_Usuario.csv`)
 - **Exponer historial de búsquedas y catálogo de proveedores (HU-05):**
@@ -175,6 +192,7 @@ worker/    Loop BRPOP sobre Redis; ejecuta el pipeline de 4 etapas
   services/stackoverflow_scraper/   scraper de StackOverflow (API pública StackExchange), envuelto por StackOverflowAdapter
   services/github_scraper/          scraper de GitHub Issues (Search API pública), envuelto por GitHubAdapter
   services/hackernews_scraper/      scraper de Hacker News (Algolia HN Search API), envuelto por HackerNewsAdapter
+  services/rss_scraper/             scraper de RSS/Atom (Google News RSS search), envuelto por RSSAdapter
   services/ai/                      llm_client, prompt_builder, annotator, relations, response_parser
 db/        Paquete compartido (SQLAlchemy): modelos (search_queries, job_logs,
            search_providers) + conexión Postgres + seed de proveedores. Se
@@ -198,7 +216,8 @@ INSTRUCCIONES_IA.md      Guía de integración de adaptadores de fuentes (idea t
    por la cantidad de fuentes registradas en vez de mantenerse acotado a
    `max_results`. Posts normalizados de todas las fuentes se acumulan y
    dedupean por URL. Fuente desconocida o que falla → aviso y se sigue con
-   las demás (hoy `"stackoverflow"`, `"github"` y `"hackernews"` registradas).
+   las demás (hoy `"stackoverflow"`, `"github"`, `"hackernews"` y `"rss"`
+   registradas).
 2. **classifying** — `annotate_posts`: relevancia + tag + moderación vía LLM
    por lotes de 15; se descartan los posts marcados `flagged`. Después se
    ordena por `relevance_score` (desc) y se corta a `max_results` — el total
@@ -252,17 +271,16 @@ adaptadores que hacen requests HTTP a terceros.
 
 ## Para la próxima sesión
 
-1. Implementar el siguiente adaptador (RSS/Atom, único pendiente de la Fase 2
-   de `INSTRUCCIONES_IA.md` sección 5 — StackOverflow, GitHub y Hacker News ya
-   están) siguiendo el contrato `SourceAdapter` y el mismo patrón que
-   `HackerNewsAdapter`/`GitHubAdapter`: módulo scraper propio + adaptador que
-   normaliza + alta en `SOURCE_REGISTRY` + fila `active` en `db/seed.py`
-   (recordar correr `python -m db` para que el seed se aplique) + sumarla a la
-   constante `SOURCES` del frontend (`frontend/src/App.tsx`) para que se
-   consulte automáticamente (ya no hay selector manual). A diferencia de las
-   fuentes anteriores, RSS no tiene buscador propio — falta decidir si el
-   adaptador filtra localmente las entradas de una lista curada de feeds, o
-   si recibe feed URLs de otra forma (definir antes de implementar).
+1. Implementar el siguiente adaptador de la Fase 2 de `INSTRUCCIONES_IA.md`
+   sección 5 — StackOverflow, GitHub, Hacker News y RSS/Atom ya están;
+   quedan, en el orden recomendado por ese documento: Web/Jina Reader (o un
+   lector HTTP equivalente, con las defensas de la sección 3.5 — solo
+   http/https, rechazar localhost/rangos privados/metadata cloud, timeout y
+   tamaño acotados) y V2EX público. Mismo patrón que `RSSAdapter`/
+   `HackerNewsAdapter`: módulo scraper propio + adaptador que normaliza +
+   alta en `SOURCE_REGISTRY` + fila `active` en `db/seed.py` (recordar
+   correr `python -m db`) + sumarla a la constante `SOURCES` del frontend
+   (`frontend/src/App.tsx`).
 2. **Bug preexistente detectado (no de esta sesión, pendiente de fix):** en
    `api/main.py` (`POST /search`), `r.rpush("jobs:queue", job_id)` ocurre
    *antes* de insertar la fila en `search_queries` (Postgres). El worker

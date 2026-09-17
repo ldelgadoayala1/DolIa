@@ -34,7 +34,7 @@ type FinalResult = {
 
 // Fuentes que la página tiene implementadas — la búsqueda siempre consulta
 // todas, sin selección manual del usuario.
-const SOURCES = ["stackoverflow", "github", "hackernews"];
+const SOURCES = ["stackoverflow", "github", "hackernews", "rss"];
 
 export default function App() {
   const [query,      setQuery]      = useState<string>("");
