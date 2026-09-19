@@ -15,7 +15,7 @@ desactualizado (no dejes que se pudra).
 > código. Si el cambio no altera nada de lo documentado aquí, no hace falta
 > tocarlo.
 
-## Resumen ejecutivo (2026-09-17)
+## Resumen ejecutivo (2026-09-19)
 
 **Arquitectura:** FastAPI (`api`) + worker Python + Redis (cola/caché en caliente,
 TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlchemy)
@@ -25,8 +25,8 @@ TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlch
 para no perder la persistencia en Postgres). Implementa la Fase 1 de
 `INSTRUCCIONES_IA.md` (contratos internos de adaptadores por fuente) y ya
 avanzó a la Fase 2 (fuentes públicas adicionales vía adaptadores: GitHub
-Issues, Hacker News y RSS/Atom, ver más abajo — de la Fase 2 (sección 5)
-todavía faltan Web/Jina Reader y V2EX público, en ese orden);
+Issues, Hacker News, RSS/Atom y CrossRef, ver más abajo — de la Fase 2
+(sección 5) todavía faltan Web/Jina Reader y V2EX público, en ese orden);
 `feature/db-search-history-logging` a su vez viene de
 `feature/elsevier-scopus-sciencedirect`, que no tenía commits propios (idéntica
 a `main`). **Ninguna de estas ramas está mergeada a `main` todavía** — `main`
@@ -34,10 +34,38 @@ no tiene ni el historial en Postgres ni este archivo.
 
 ### Lo que funciona hoy
 - Pipeline de 4 etapas end-to-end vía SSE (`/search`, `/events`, `/job_result`)
-  con scraping funcional de **StackOverflow, GitHub Issues, Hacker News y
-  RSS/Atom (noticias vía Google News)** (cuatro fuentes activas). El frontend
-  ya no deja elegir fuente — cada búsqueda consulta automáticamente todas las
-  implementadas (ver más abajo).
+  con scraping funcional de **StackOverflow, GitHub Issues, Hacker News,
+  RSS/Atom (noticias vía Google News) y CrossRef** (cinco fuentes activas).
+  El frontend ya no deja elegir fuente — cada búsqueda consulta
+  automáticamente todas las implementadas (ver más abajo).
+- **CrossRef (adaptador nuevo, 2026-09-19):** `CrossRefAdapter` envuelve
+  `worker/services/crossref_scraper/crossref_scraper_service.py`, que pega
+  contra la API pública de búsqueda de CrossRef (`api.crossref.org/works`,
+  literatura académica) con query de texto libre real, gratuita y sin
+  autenticación. Implementado como prioridad para el debut (ver "Testeo
+  contra los tracks del debut" más abajo): a diferencia de
+  StackOverflow/GitHub/HN (búsqueda literal por palabras clave), CrossRef sí
+  entiende texto libre — incluye título, autor(es) (primer autor + "et al."
+  si hay más), fecha (`date-parts` → `YYYY-MM-DD`/`YYYY-MM`/`YYYY` según lo
+  que venga), abstract (XML JATS, se limpia con BeautifulSoup igual que RSS)
+  y hasta 5 `subject` como tags (campo semi-deprecado en CrossRef — muchos
+  items no lo traen, así que igual que HN/RSS puede aportar `tags: []`, no
+  rompe nada). Reutiliza `beautifulsoup4`, ya en `worker/requirements.txt` —
+  no se agregó ninguna dependencia nueva. Registrado en `SOURCE_REGISTRY`,
+  sumado a `PROVIDERS` en `db/seed.py` (slug `crossref`, `status="active"`)
+  y a la constante `SOURCES` del frontend. **Verificado end-to-end contra
+  Docker real**, incluyendo una corrida contra los 5 tracks completos del
+  debut (5 fuentes, `max_results=16`, ver "Testeo contra los tracks del
+  debut" — **hueco cerrado**): CrossRef entregó 4/4 (el tope por fuente con
+  `max_results=16`/5 fuentes) en las 5 tracks por igual, todos
+  temáticamente relevantes (confirmado leyendo los títulos, no solo el
+  conteo) — a diferencia de StackOverflow/HN, que siguieron en 0 en las 5
+  tracks. El resultado final por track subió de 4-6 posts (hallazgo de la
+  sesión anterior, solo RSS aportaba) a 9-12 posts, con RSS + CrossRef como
+  las dos fuentes consistentes y GitHub aportando 1-4 según el track.
+  También probado: CrossRef en solitario (10/10 resultados relevantes para
+  "cuidados y economía del cuidado") y junto a una fuente inexistente en
+  `sources` (no cancela el job, sigue con CrossRef).
 - **Registro de adaptadores de fuentes** (`worker/services/adapters/`, ver
   `INSTRUCCIONES_IA.md` sección 3.1-3.2): `worker/main.py` ya no tiene un `if
   "stackoverflow" in sources` hardcodeado — itera `payload.sources`, busca cada
@@ -114,9 +142,9 @@ no tiene ni el historial en Postgres ni este archivo.
   selector de fuentes**: se eliminó el checkbox manual (`AVAILABLE_SOURCES`/
   `SOURCE_ICONS` en `App.tsx`) — el frontend siempre manda todas las fuentes
   implementadas (constante `SOURCES` en `App.tsx`, hoy `["stackoverflow",
-  "github", "hackernews", "rss"]`) en cada búsqueda. Al agregar un adaptador
-  nuevo hay que sumarlo también a esa constante para que se consulte
-  automáticamente.
+  "github", "hackernews", "rss", "crossref"]`) en cada búsqueda. Al agregar
+  un adaptador nuevo hay que sumarlo también a esa constante para que se
+  consulte automáticamente.
 - **Historial de búsquedas y logging estructurado en Postgres** (paquete
   `db/`, rama `feature/db-search-history-logging`): `POST /search` crea una
   fila en `search_queries` (query, sources, max_results, status="queued")
@@ -175,6 +203,41 @@ no tiene ni el historial en Postgres ni este archivo.
   sesión): en vez de una lista curada de feeds + filtro local de texto, usa
   el feed de búsqueda de Google News (`news.google.com/rss/search?q=...`),
   que sí soporta query de texto libre igual que las demás fuentes.
+- **CrossRef (prioridad del debut, sin HU asociada en `Historias_Usuario.csv`):**
+  ✅ implementado (`CrossRefAdapter`, ver "Lo que funciona hoy"). Usa la API
+  pública de búsqueda de CrossRef (`api.crossref.org/works`, literatura
+  académica, texto libre real, gratuita y sin autenticación).
+
+### Testeo contra los tracks del debut (2026-09-17)
+La jefa del usuario compartió los 5 tracks temáticos que se van a usar el día
+del debut (impacto social: autonomía económica/laboral, cuidados, violencia y
+espacios seguros, inclusión/accesibilidad, STEM/IA — no son temas de
+programación). Se probó cada track como búsqueda real contra Docker
+(`sources` completas, `max_results=16`), primero el pipeline completo y
+después cada adaptador por separado con la query cruda para aislar la causa.
+**Hallazgo:** StackOverflow y Hacker News devolvieron 0 resultados en las 5
+tracks, GitHub 0-2, y solo RSS (Google News) entregó resultados consistentes
+(4/4 siempre) — el resultado final quedó muy por debajo de `max_results`
+(4-6 posts en vez de 16) y el grafo casi vacío (RSS no aporta `tags`). No es
+un bug de esta sesión: StackOverflow/GitHub/HN usan búsqueda **literal por
+palabras clave**, no semántica — confirmado probando la misma fuente con
+keywords cortas (`"accessibility disability"`) en vez de la pregunta
+desafío completa, lo que sí trajo 5/5/5 resultados. Conclusión: esas tres
+fuentes fueron priorizadas para debugging técnico (ver HU-03/HU-04 en
+`Historias_Usuario.csv`) y aportan poco a temas de impacto social sin
+importar la fuente — el problema es de encaje temático, no de fase de
+implementación.
+
+**Actualización 2026-09-19 — hueco cerrado:** con el adaptador de CrossRef
+implementado (ver "Lo que funciona hoy"), se repitió la misma prueba contra
+los 5 tracks (5 fuentes, `max_results=16`, queries en español equivalentes
+a las de la jefa del usuario: autonomía económica/laboral, cuidados,
+violencia y espacios seguros, inclusión/accesibilidad, STEM/IA). CrossRef
+entregó 4/4 resultados relevantes en las 5 tracks por igual (StackOverflow
+y HN se mantuvieron en 0 en las 5, GitHub 1-4 según el track) — el
+resultado final subió de 4-6 posts a 9-12 posts sobre `max_results=16`, con
+RSS + CrossRef como las dos fuentes que sostienen el volumen y la
+relevancia temática en todos los tracks.
 
 ### Historial y observabilidad (ver `Historias_Usuario.csv`)
 - **Exponer historial de búsquedas y catálogo de proveedores (HU-05):**
@@ -193,6 +256,7 @@ worker/    Loop BRPOP sobre Redis; ejecuta el pipeline de 4 etapas
   services/github_scraper/          scraper de GitHub Issues (Search API pública), envuelto por GitHubAdapter
   services/hackernews_scraper/      scraper de Hacker News (Algolia HN Search API), envuelto por HackerNewsAdapter
   services/rss_scraper/             scraper de RSS/Atom (Google News RSS search), envuelto por RSSAdapter
+  services/crossref_scraper/        scraper de literatura académica (CrossRef Works API), envuelto por CrossRefAdapter
   services/ai/                      llm_client, prompt_builder, annotator, relations, response_parser
 db/        Paquete compartido (SQLAlchemy): modelos (search_queries, job_logs,
            search_providers) + conexión Postgres + seed de proveedores. Se
@@ -216,8 +280,8 @@ INSTRUCCIONES_IA.md      Guía de integración de adaptadores de fuentes (idea t
    por la cantidad de fuentes registradas en vez de mantenerse acotado a
    `max_results`. Posts normalizados de todas las fuentes se acumulan y
    dedupean por URL. Fuente desconocida o que falla → aviso y se sigue con
-   las demás (hoy `"stackoverflow"`, `"github"`, `"hackernews"` y `"rss"`
-   registradas).
+   las demás (hoy `"stackoverflow"`, `"github"`, `"hackernews"`, `"rss"` y
+   `"crossref"` registradas).
 2. **classifying** — `annotate_posts`: relevancia + tag + moderación vía LLM
    por lotes de 15; se descartan los posts marcados `flagged`. Después se
    ordena por `relevance_score` (desc) y se corta a `max_results` — el total
@@ -271,17 +335,24 @@ adaptadores que hacen requests HTTP a terceros.
 
 ## Para la próxima sesión
 
-1. Implementar el siguiente adaptador de la Fase 2 de `INSTRUCCIONES_IA.md`
-   sección 5 — StackOverflow, GitHub, Hacker News y RSS/Atom ya están;
-   quedan, en el orden recomendado por ese documento: Web/Jina Reader (o un
-   lector HTTP equivalente, con las defensas de la sección 3.5 — solo
-   http/https, rechazar localhost/rangos privados/metadata cloud, timeout y
-   tamaño acotados) y V2EX público. Mismo patrón que `RSSAdapter`/
-   `HackerNewsAdapter`: módulo scraper propio + adaptador que normaliza +
-   alta en `SOURCE_REGISTRY` + fila `active` en `db/seed.py` (recordar
-   correr `python -m db`) + sumarla a la constante `SOURCES` del frontend
+1. **Adaptador de CrossRef — ✅ implementado y verificado contra los 5 tracks
+   completos del debut (2026-09-19)**, ver "Lo que funciona hoy" y "Testeo
+   contra los tracks del debut" (hueco cerrado). Candidato secundario, no
+   decidido: búsqueda pública de Reddit (JSON de solo lectura, sin login) para voz de
+   comunidad — `INSTRUCCIONES_IA.md` sección 4.3 marca Reddit *autenticado*
+   como fuente que necesita revisión explícita antes de habilitarse;
+   confirmar con el usuario si el modo público sin login aplica igual antes
+   de construirlo, no asumirlo. Mismo patrón que `RSSAdapter`/`CrossRefAdapter`:
+   módulo scraper propio + adaptador que normaliza + alta en
+   `SOURCE_REGISTRY` + fila `active` en `db/seed.py` (recordar correr
+   `python -m db`) + sumarla a la constante `SOURCES` del frontend
    (`frontend/src/App.tsx`).
-2. **Bug preexistente detectado (no de esta sesión, pendiente de fix):** en
+2. De la Fase 2 de `INSTRUCCIONES_IA.md` sección 5 todavía quedan, en el
+   orden recomendado por ese documento: Web/Jina Reader (o un lector HTTP
+   equivalente, con las defensas de la sección 3.5 — solo http/https,
+   rechazar localhost/rangos privados/metadata cloud, timeout y tamaño
+   acotados) y V2EX público.
+3. **Bug preexistente detectado (no de esta sesión, pendiente de fix):** en
    `api/main.py` (`POST /search`), `r.rpush("jobs:queue", job_id)` ocurre
    *antes* de insertar la fila en `search_queries` (Postgres). El worker
    puede desencolar el job y llamar a `emit()` (que escribe en `job_logs`)
@@ -291,17 +362,17 @@ adaptadores que hacen requests HTTP a terceros.
    con jobs de Hacker News, GitHub y StackOverflow por igual — no es
    específico de ninguna fuente. Fix sugerido: mover el insert de
    `SearchQuery` antes del `rpush`.
-3. **HU-05 — exponer historial/proveedores (rama `feature/db-search-history-logging`):**
+4. **HU-05 — exponer historial/proveedores (rama `feature/db-search-history-logging`):**
    la persistencia ya está conectada y probada (ver "Lo que funciona hoy").
    Falta la capa de lectura: endpoints en la API (ej. `GET /search_history`,
    `GET /providers`) y la vista en el frontend. Evaluar también si conviene
    Alembic una vez el esquema empiece a cambiar más seguido (hoy
    `init_db()` con `create_all()` alcanza).
-4. Confirmar acceso institucional UNAB a Scopus/ScienceDirect antes de tocar
+5. Confirmar acceso institucional UNAB a Scopus/ScienceDirect antes de tocar
    HU-02 (Elsevier) — no vale la pena implementar el conector sin esa
    confirmación.
-5. Si se retoma X/Twitter (HU-01), verificar primero si ya se habilitó
+6. Si se retoma X/Twitter (HU-01), verificar primero si ya se habilitó
    billing en el X Developer Portal.
-6. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
+7. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
    contra el código — quedó desactualizado en los puntos de IA (ver nota en
    el resumen ejecutivo).

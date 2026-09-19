@@ -44,6 +44,18 @@ PROVIDERS = [
         requires_auth=False,
     ),
     dict(
+        slug="crossref",
+        display_name="CrossRef",
+        status="active",
+        description=(
+            "Literatura académica vía la API pública de CrossRef (api.crossref.org), "
+            "búsqueda de texto libre real. Priorizada para los tracks de impacto social "
+            "del debut (ver CLAUDE.md, 'Testeo contra los tracks del debut')."
+        ),
+        rate_limit_info="Sin límite estricto documentado; API pública sin autenticación.",
+        requires_auth=False,
+    ),
+    dict(
         slug="elsevier_scopus",
         display_name="Elsevier / Scopus / ScienceDirect",
         status="pending",
