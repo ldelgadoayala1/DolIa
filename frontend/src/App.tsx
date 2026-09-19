@@ -332,8 +332,7 @@ export default function App() {
               <div className="empty-icon">🔬</div>
               <h3>Ingresa una dolencia para comenzar</h3>
               <p>
-                El sistema analizará publicaciones de StackOverflow y GitHub
-                y generará visualizaciones con IA.
+                El sistema analizará publicaciones de múltiples fuentes que aporten información relevante para su investigación
               </p>
             </div>
           )}
