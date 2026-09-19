@@ -20,7 +20,7 @@ def _extract_items(raw: Any) -> List[Dict[str, Any]]:
 
 def normalize_annotations(raw: Dict[str, Any], batch_size: int) -> Dict[int, Dict[str, Any]]:
     """
-    Normaliza la respuesta del LLM a un dict {index: {relevance_score, tag, justification}}.
+    Normaliza la respuesta del LLM a un dict {index: {relevance_score, tag, flagged}}.
     Tolerante a variaciones de nombre de campo, como en RubricAgent.
     Cualquier índice faltante o inválido simplemente no aparece en el resultado.
     """
@@ -63,18 +63,10 @@ def normalize_annotations(raw: Dict[str, Any], batch_size: int) -> Dict[int, Dic
             or False
         )
 
-        justification = (
-            item.get("justification")
-            or item.get("feedback")
-            or item.get("comment")
-            or ""
-        )
-
         normalized[index] = {
             "relevance_score": score,
             "tag": tag,
             "flagged": flagged,
-            "justification": justification,
         }
 
     return normalized

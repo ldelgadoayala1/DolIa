@@ -53,7 +53,6 @@ Para cada post, evalúa:
    Debe ser exactamente una de estas opciones: {tags_list}.
 3. flagged: true si el título o el extracto contienen lenguaje ofensivo,
    vulgar, discriminatorio o inapropiado; false en caso contrario.
-4. justification: una frase corta explicando el score y el tag asignados.
 
 POSTS:
 {formatted_posts}
@@ -68,8 +67,7 @@ FORMATO JSON ESPERADO:
             "index": 0,
             "relevance_score": 85,
             "tag": "Solucion",
-            "flagged": false,
-            "justification": "Explica directamente cómo resolver el problema buscado."
+            "flagged": false
         }},
         "repetir para cada post del lote, usando su índice..."
     ]

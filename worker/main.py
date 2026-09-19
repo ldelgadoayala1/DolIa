@@ -262,7 +262,14 @@ def worker_loop():
             if real_posts:
                 emit(job_id, "classifying", 55,
                      "Analizando relevancia y filtrando contenido inapropiado con IA...")
-                real_posts = annotate_posts(query, real_posts)
+                real_posts, annotation_errors = annotate_posts(query, real_posts)
+
+                if annotation_errors:
+                    emit(job_id, "classifying", 60,
+                         f"⚠️ {len(annotation_errors)} lote(s) de clasificación fallaron "
+                         "tras reintentar (gateway LLM o JSON inválido) — esos posts quedaron "
+                         "con relevancia/tag por defecto",
+                         data={"batch_errors": annotation_errors})
 
                 flagged_count = sum(1 for p in real_posts if p.get("flagged"))
                 real_posts = [p for p in real_posts if not p.get("flagged")]

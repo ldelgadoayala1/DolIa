@@ -129,17 +129,54 @@ no tiene ni el historial en Postgres ni este archivo.
   accesibilidad) — ahora sí es la IA priorizando por relevancia real, no el
   scraper repartiendo cupo.
 - **Relevancia y etiquetado por IA real**: `annotate_posts` llama al LLM
-  (gateway UNAB, `gemma4:e2b`) por lotes y asigna `relevance_score`, `tag` y
-  `flagged` (moderación de contenido inapropiado) a cada post.
+  (gateway UNAB, `gemma4:e2b`) por lotes (`batch_size=8`) y asigna
+  `relevance_score`, `tag` y `flagged` (moderación de contenido inapropiado)
+  a cada post.
+- **Clasificación con `max_results` grandes (30+) — bug de confiabilidad
+  detectado y corregido (2026-09-19):** el usuario reportó un "error en el
+  scraper" al buscar con `max_results=30`; investigando se confirmó que el
+  problema real está en **classifying**, no en scraping: con el fix de
+  `per_source_limit` (arriba) `max_results=30` escala el pool a clasificar
+  a ~90 posts. Con el `batch_size` original (15) y el campo `justification`
+  que el prompt le pedía al LLM por cada post (nunca usado — se parseaba en
+  `response_parser.py` pero no se copiaba al post final), el modelo
+  (`gemma4:e2b`, chico y verboso — internamente rutea a `gemma4:26b`)
+  fallaba en generar JSON válido en la mayoría de los lotes de un job
+  grande (5 de 6 lotes en una prueba real). Como `chat_completion` usa
+  `temperature=0`, agregar reintentos solos no alcanzaba: mismo prompt →
+  mismo JSON roto determinísticamente, no es una falla transitoria de red.
+  **Fix de dos partes:**
+  1. `llm_client.call_llm_json` ahora reintenta hasta 3 veces con backoff
+     exponencial (mismo patrón que los scrapers) — sí ayuda contra fallas
+     de red genuinamente transitorias (ej. el 504 de Cloudflare que se vio
+     contra `quotas.devhub.cl`).
+  2. Se sacó `justification` del prompt/schema (`prompt_builder.py`,
+     `response_parser.py` — campo muerto) y se bajó `batch_size` de 15 a 8
+     (`annotator.py`) para reducir cuánto JSON tiene que generar el modelo
+     por llamada.
+  Reverificado con `max_results=30` tras el fix: **0 de 12 lotes fallaron**
+  (antes 5 de 6), los 30 posts finales quedaron con `relevance_score` real
+  de la IA (ninguno en `None`/default), en tiempo total similar al de antes
+  (~8 min) pese al doble de lotes.
+  **Visibilidad (antes invisible):** `annotate_posts` ahora devuelve
+  `(posts, batch_errors)` en vez de solo `posts` — si algún lote falla
+  igual tras los reintentos, `worker/main.py` lo emite como evento
+  `classifying` (visible en `job_logs` y por SSE al frontend) en vez de
+  quedar solo en un `print()` a stdout que solo se ve con
+  `docker compose logs worker`.
 - **Grafo semántico real**: `infer_topic_relations` le pide al LLM las
   relaciones entre los tags más frecuentes; si el LLM falla, cae a un grafo de
   co-ocurrencia (temas que aparecen juntos en el mismo post) como fallback,
   nunca a reglas fijas.
 - **El pipeline es resiliente a fallas del LLM (verificado)**: si el gateway
   responde error (ej. API key inválida/revocada, 401), tanto `annotate_posts`
-  como `infer_topic_relations` atrapan la excepción, la imprimen (`[ai] error
+  como `infer_topic_relations` atrapan la excepción (después de los 3
+  reintentos de `call_llm_json`, ver arriba), la imprimen (`[ai] error
   ...`) y siguen con fallback (relevancia/tag por defecto, "Sin clasificar",
-  grafo por co-ocurrencia) en vez de propagarla. El job igual termina en
+  grafo por co-ocurrencia) en vez de propagarla. Las fallas de
+  `annotate_posts` además quedan visibles en `job_logs`/SSE (ver arriba);
+  las de `infer_topic_relations` (grafo) por ahora siguen solo en el
+  `print()`, sin cambios en esta sesión. El job igual termina en
   `search_queries.status = "done"` — una falla del LLM por sí sola **no**
   genera un registro `status="error"` ni una fila `level="ERROR"` en
   `job_logs`. Solo fallas más duras (scraper, parseo del payload, etc.) que
@@ -394,3 +431,11 @@ adaptadores que hacen requests HTTP a terceros.
 7. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
    contra el código — quedó desactualizado en los puntos de IA (ver nota en
    el resumen ejecutivo).
+8. **Fallas de `infer_topic_relations` (grafo) siguen invisibles fuera de
+   `docker compose logs worker`** — a diferencia de `annotate_posts` (ya
+   corregido esta sesión, ver "Clasificación con `max_results` grandes"),
+   `build_graph`/`infer_topic_relations` no tienen acceso a `job_id` para
+   emitir un aviso a `job_logs`/SSE si el LLM falla. Si se prioriza, requiere
+   pasar `job_id` a través de `run_llm_aggregate` → `build_graph` (o mover
+   el emit al caller en `worker/main.py`, similar a como quedó
+   `annotate_posts`).

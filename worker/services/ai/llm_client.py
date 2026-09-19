@@ -1,5 +1,6 @@
 import os
 import json
+import time
 from pathlib import Path
 
 import requests
@@ -61,11 +62,30 @@ def chat_completion(
 
 def call_llm_json(system_prompt: str, user_prompt: str, model: str | None = None) -> dict:
     """
-    Llama al LLM esperando una respuesta JSON válida y la parsea.
+    Llama al LLM esperando una respuesta JSON válida y la parsea. Reintenta
+    hasta 3 veces con backoff exponencial (mismo patrón que los scrapers,
+    ver worker/services/*_scraper/*.py) — el gateway UNAB (quotas.devhub.cl)
+    devuelve 504 bajo carga, y el modelo chico (gemma4:e2b) a veces genera
+    JSON inválido; en ambos casos, reintentar recupera la mayoría de los
+    casos en vez de degradar el lote entero a valores por defecto en el
+    primer hipo.
     """
-    content = chat_completion(system_prompt, user_prompt, model=model)
+    last_error: Exception | None = None
 
-    try:
-        return json.loads(content)
-    except json.JSONDecodeError as e:
-        raise RuntimeError(f"Error parseando JSON del LLM: {e}. Contenido: {content}")
+    for attempt in range(3):
+        try:
+            content = chat_completion(system_prompt, user_prompt, model=model)
+        except requests.exceptions.RequestException as e:
+            last_error = RuntimeError(f"Error de red llamando al LLM: {e}")
+        except RuntimeError as e:
+            last_error = e
+        else:
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError as e:
+                last_error = RuntimeError(f"Error parseando JSON del LLM: {e}. Contenido: {content}")
+
+        if attempt < 2:
+            time.sleep(2 ** attempt)
+
+    raise last_error
