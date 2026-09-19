@@ -56,15 +56,15 @@ no tiene ni el historial en Postgres ni este archivo.
   y a la constante `SOURCES` del frontend. **Verificado end-to-end contra
   Docker real**, incluyendo una corrida contra los 5 tracks completos del
   debut (5 fuentes, `max_results=16`, ver "Testeo contra los tracks del
-  debut" — **hueco cerrado**): CrossRef entregó 4/4 (el tope por fuente con
-  `max_results=16`/5 fuentes) en las 5 tracks por igual, todos
-  temáticamente relevantes (confirmado leyendo los títulos, no solo el
-  conteo) — a diferencia de StackOverflow/HN, que siguieron en 0 en las 5
-  tracks. El resultado final por track subió de 4-6 posts (hallazgo de la
-  sesión anterior, solo RSS aportaba) a 9-12 posts, con RSS + CrossRef como
-  las dos fuentes consistentes y GitHub aportando 1-4 según el track.
-  También probado: CrossRef en solitario (10/10 resultados relevantes para
-  "cuidados y economía del cuidado") y junto a una fuente inexistente en
+  debut" — **hueco cerrado**, y ver también "`max_results` es un total...
+  y lo elige la IA, no el scraper" más abajo: la primera corrida de esta
+  prueba destapó un bug de reparto de cupo preexistente, ya corregido).
+  Con el bug corregido, los 5 tracks llegan a 16/16 resultados, con
+  StackOverflow/HN en 0 y RSS/CrossRef/GitHub repartiéndose el resto según
+  relevancia real (no en partes iguales) — confirmado leyendo los títulos
+  del resultado completo, no solo el conteo. También probado: CrossRef en
+  solitario (10/10 resultados relevantes para "cuidados y economía del
+  cuidado") y junto a una fuente inexistente en
   `sources` (no cancela el job, sigue con CrossRef).
 - **Registro de adaptadores de fuentes** (`worker/services/adapters/`, ver
   `INSTRUCCIONES_IA.md` sección 3.1-3.2): `worker/main.py` ya no tiene un `if
@@ -107,16 +107,27 @@ no tiene ni el historial en Postgres ni este archivo.
   (`docker compose run --rm api python -m db`, ver sección "Cómo correr el
   proyecto"). Si vas a dar de alta una fuente nueva en `db/seed.py`, no vas a
   ver el cambio reflejado en la tabla hasta correr ese comando.
-- **`max_results` es un total, no un total por fuente**: antes cada fuente
-  activa pedía `max_results` completo (con StackOverflow + GitHub, 30 posts
-  pedidos terminaban en 60 antes de cortar), y ese factor de multiplicación
-  iba a crecer con cada fuente nueva. Ahora `worker/main.py` reparte
-  `max_results` entre las fuentes activas al pedir (`per_source_limit`), y
-  después de clasificar con IA ordena todo por `relevance_score` (desc) y
-  corta a `max_results` — el resultado final siempre es como máximo
-  `max_results` posts, los más relevantes según la IA. Verificado: pedido de
-  30 con `["stackoverflow", "github"]` → 15+15 al scrapear, 30 en el
-  resultado final.
+- **`max_results` es un total, no un total por fuente, y lo elige la IA, no
+  el scraper (corregido 2026-09-19):** la primera versión de esto (commit
+  `908cfc2`) repartía `max_results` en partes iguales entre las fuentes
+  activas (`per_source_limit = ceil(max_results / n_fuentes)`) — con 5
+  fuentes y `max_results=16` eso le daba el mismo cupo (4) a una fuente que
+  no traía nada (StackOverflow/HN) que a una fuerte (CrossRef/RSS), y
+  además capaba el pool que llegaba a la IA por debajo de `max_results`
+  aunque una sola fuente hubiera podido cubrirlo entera — la IA terminaba
+  rankeando dentro de un pool ya recortado en partes iguales, no eligiendo
+  libremente. Se detectó repitiendo el testeo de los 5 tracks del debut con
+  CrossRef ya integrado (ver "Testeo contra los tracks del debut"): los
+  resultados por fuente salían en múltiplos redondos de 4, señal de que no
+  era la IA decidiendo. **Fix:** `per_source_limit = min(max_results,
+  PER_SOURCE_CAP)` (`PER_SOURCE_CAP = 30` en `worker/main.py`) — cada fuente
+  puede aportar hasta ese tope fijo, independiente de cuántas fuentes estén
+  activas, y recién después `annotate_posts` (IA) asigna `relevance_score` y
+  se ordena/corta a `max_results`. Reverificado con los 5 tracks: los 5
+  llegaron a 16/16 (antes 9-12) y la distribución por fuente dejó de ser
+  pareja (ej. RSS 13-15/16 en la mayoría, pero CrossRef 8/16 en el track de
+  accesibilidad) — ahora sí es la IA priorizando por relevancia real, no el
+  scraper repartiendo cupo.
 - **Relevancia y etiquetado por IA real**: `annotate_posts` llama al LLM
   (gateway UNAB, `gemma4:e2b`) por lotes y asigna `relevance_score`, `tag` y
   `flagged` (moderación de contenido inapropiado) a cada post.
@@ -228,16 +239,24 @@ fuentes fueron priorizadas para debugging técnico (ver HU-03/HU-04 en
 importar la fuente — el problema es de encaje temático, no de fase de
 implementación.
 
-**Actualización 2026-09-19 — hueco cerrado:** con el adaptador de CrossRef
-implementado (ver "Lo que funciona hoy"), se repitió la misma prueba contra
-los 5 tracks (5 fuentes, `max_results=16`, queries en español equivalentes
-a las de la jefa del usuario: autonomía económica/laboral, cuidados,
-violencia y espacios seguros, inclusión/accesibilidad, STEM/IA). CrossRef
-entregó 4/4 resultados relevantes en las 5 tracks por igual (StackOverflow
-y HN se mantuvieron en 0 en las 5, GitHub 1-4 según el track) — el
-resultado final subió de 4-6 posts a 9-12 posts sobre `max_results=16`, con
-RSS + CrossRef como las dos fuentes que sostienen el volumen y la
-relevancia temática en todos los tracks.
+**Actualización 2026-09-19 — hueco cerrado, y un bug de reparto de cupo
+detectado en el camino:** con el adaptador de CrossRef implementado (ver
+"Lo que funciona hoy"), se repitió la misma prueba contra los 5 tracks (5
+fuentes, `max_results=16`, queries en español equivalentes a las de la
+jefa del usuario). Primera corrida: CrossRef entregó 4/4 en las 5 tracks
+por igual (StackOverflow/HN en 0, GitHub 1-4) y el resultado final subió de
+4-6 a 9-12 posts — pero el usuario notó que esos números redondos (4/4/4)
+no podían ser la IA eligiendo, y tenía razón: `per_source_limit` todavía
+repartía `max_results` en partes iguales entre las fuentes activas (ver
+"`max_results` es un total... y lo elige la IA, no el scraper" arriba), así
+que ninguna fuente podía aportar más de 4 sin importar qué tan buena fuera,
+y el pool nunca llegó a superar `max_results` para que el paso de "ordenar
+y cortar" hiciera algo. Con el fix (`per_source_limit` como tope fijo por
+fuente, no repartido), se repitió la prueba una tercera vez: los 5 tracks
+llegaron a 16/16, con distribución no pareja y consistente con relevancia
+real — RSS domina la mayoría (13-15/16), CrossRef sube a 8/16 en el track
+de accesibilidad. Confirmado leyendo los títulos del resultado completo de
+un track (no solo el conteo): todos temáticamente relevantes.
 
 ### Historial y observabilidad (ver `Historias_Usuario.csv`)
 - **Exponer historial de búsquedas y catálogo de proveedores (HU-05):**
@@ -273,15 +292,14 @@ INSTRUCCIONES_IA.md      Guía de integración de adaptadores de fuentes (idea t
 ## Pipeline del worker (`worker/main.py`)
 
 1. **scraping** — por cada fuente en `payload.sources`, busca el adaptador en
-   `SOURCE_REGISTRY` (`worker/services/adapters/registry.py`). `max_results`
-   se reparte entre las fuentes activas (`per_source_limit`, división
-   redondeando hacia arriba) en vez de pedírselo completo a cada una — si no,
-   el volumen total (y el trabajo de clasificación IA) crecería multiplicado
-   por la cantidad de fuentes registradas en vez de mantenerse acotado a
-   `max_results`. Posts normalizados de todas las fuentes se acumulan y
-   dedupean por URL. Fuente desconocida o que falla → aviso y se sigue con
-   las demás (hoy `"stackoverflow"`, `"github"`, `"hackernews"`, `"rss"` y
-   `"crossref"` registradas).
+   `SOURCE_REGISTRY` (`worker/services/adapters/registry.py`) y le pide hasta
+   `per_source_limit = min(max_results, PER_SOURCE_CAP)` posts (tope fijo por
+   fuente, `PER_SOURCE_CAP = 30`, **no** repartido en partes iguales entre la
+   cantidad de fuentes activas — ver "`max_results` es un total... y lo
+   elige la IA, no el scraper" arriba). Posts normalizados de todas las
+   fuentes se acumulan y dedupean por URL. Fuente desconocida o que falla →
+   aviso y se sigue con las demás (hoy `"stackoverflow"`, `"github"`,
+   `"hackernews"`, `"rss"` y `"crossref"` registradas).
 2. **classifying** — `annotate_posts`: relevancia + tag + moderación vía LLM
    por lotes de 15; se descartan los posts marcados `flagged`. Después se
    ordena por `relevance_score` (desc) y se corta a `max_results` — el total

@@ -25,6 +25,17 @@ STOPWORDS = {
 LOG_LEVEL = os.getenv("WORKER_LOG_LEVEL", "INFO")
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 
+# Tope de posts a pedirle a CADA fuente activa. No se divide max_results entre
+# la cantidad de fuentes: repartir en partes iguales le da el mismo cupo a una
+# fuente floja (0 resultados) que a una fuerte, y termina capando el pool que
+# ve la IA por debajo de max_results aunque una sola fuente pudiera cubrirlo
+# entera (ver CLAUDE.md, testeo de los tracks del debut). Este cap es
+# independiente de la cantidad de fuentes registradas — acota el costo de
+# clasificación por fuente sin que se achique a medida que se agregan
+# adaptadores nuevos. La selección final de los max_results mejores posts la
+# hace la IA (relevance_score), no el reparto de cupo en el scraping.
+PER_SOURCE_CAP = 30
+
 
 def _persist_log(job_id: str, stage: str, level: str, message: str, data: Dict[str, Any] | None) -> None:
     """Best-effort: un problema de DB no debe tumbar el pipeline (Redis/SSE sigue siendo la vía crítica)."""
@@ -216,11 +227,12 @@ def worker_loop():
                     continue
                 active_adapters.append(adapter)
 
-            # Repartir max_results entre las fuentes activas en vez de pedirle
-            # max_results completo a cada una — si no, el volumen total (y el
-            # trabajo de clasificación por IA) crece multiplicado por la
-            # cantidad de fuentes en vez de mantenerse acotado a max_results.
-            per_source_limit = -(-max_results // len(active_adapters)) if active_adapters else max_results
+            # Pedirle a cada fuente hasta PER_SOURCE_CAP posts (tope fijo, no
+            # repartido entre la cantidad de fuentes activas) para que la IA
+            # tenga un pool real del que elegir los max_results mejores, en
+            # vez de que el scraper decida de antemano cuántos aporta cada
+            # fuente en partes iguales.
+            per_source_limit = min(max_results, PER_SOURCE_CAP)
 
             real_posts: List[Dict[str, Any]] = []
 
