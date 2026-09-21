@@ -66,6 +66,45 @@
   text-transform: uppercase;
 }
 
+.navbar-tabs {
+  display: flex;
+  gap: 4px;
+  background: rgba(255,255,255,0.12);
+  border-radius: var(--radius-full);
+  padding: 3px;
+}
+
+.navbar-tab {
+  background: transparent;
+  border: none;
+  color: rgba(255,255,255,0.75);
+  font-size: 0.85rem;
+  font-weight: 600;
+  padding: 6px 16px;
+  border-radius: var(--radius-full);
+  cursor: pointer;
+  transition: background 0.15s ease, color 0.15s ease;
+}
+
+.navbar-tab:hover {
+  color: var(--white);
+}
+
+.navbar-tab-active {
+  background: var(--white);
+  color: var(--unab-blue-dark);
+}
+
+.history-log-list {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  font-size: 0.85rem;
+}
+
 /* ══════════════════════════════════════════
    LAYOUT PRINCIPAL
 ══════════════════════════════════════════ */

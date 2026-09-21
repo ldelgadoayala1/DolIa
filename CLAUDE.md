@@ -15,7 +15,7 @@ desactualizado (no dejes que se pudra).
 > código. Si el cambio no altera nada de lo documentado aquí, no hace falta
 > tocarlo.
 
-## Resumen ejecutivo (2026-09-19)
+## Resumen ejecutivo (2026-09-21)
 
 **Arquitectura:** FastAPI (`api`) + worker Python + Redis (cola/caché en caliente,
 TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlchemy)
@@ -196,18 +196,43 @@ no tiene ni el historial en Postgres ni este archivo.
 - **Historial de búsquedas y logging estructurado en Postgres** (paquete
   `db/`, rama `feature/db-search-history-logging`): `POST /search` crea una
   fila en `search_queries` (query, sources, max_results, status="queued")
-  antes de encolar el job; el `worker` la actualiza a "running" al empezar,
-  y a "done"/"error" al terminar (con `summary`, `posts_count`,
-  `error_message`, `completed_at`). Cada llamada a `emit()` en el worker
-  ahora también persiste una fila en `job_logs` (stage, level, message,
-  data) — reemplaza el logging por `print()` sueltos. Todo esto es
-  best-effort: si Postgres falla, el pipeline Redis/SSE (la vía crítica)
-  sigue funcionando igual, solo se pierde ese registro puntual y se
-  imprime un warning. Probado end-to-end contra Postgres real (ver
-  commits de esta rama). **Falta:** exponer este historial/log por API
-  (ej. `GET /search_history`, `GET /providers`) y mostrarlo en el
-  frontend — todavía no hay UI ni endpoint de lectura, solo se puede
-  consultar la tabla directamente.
+  **antes** de encolar el job en Redis (`r.rpush`) — se movió el insert
+  antes del `rpush` (ver "Bug de orden de escritura corregido" más abajo);
+  el `worker` la actualiza a "running" al empezar, y a "done"/"error" al
+  terminar (con `summary`, `posts_count`, `error_message`, `completed_at`).
+  Cada llamada a `emit()` en el worker también persiste una fila en
+  `job_logs` (stage, level, message, data) — reemplaza el logging por
+  `print()` sueltos. Todo esto es best-effort: si Postgres falla, el
+  pipeline Redis/SSE (la vía crítica) sigue funcionando igual, solo se
+  pierde ese registro puntual y se imprime un warning. Probado end-to-end
+  contra Postgres real.
+- **HU-05 — historial/proveedores expuestos por API y frontend
+  (2026-09-21, hueco cerrado):** tres endpoints nuevos de solo lectura en
+  `api/main.py`, todos probados contra Docker real con datos reales:
+  - `GET /providers` — catálogo completo de `search_providers` (7 fuentes,
+    slug/estado/descripción/rate limit/requiere auth).
+  - `GET /search_history?limit=&offset=` — historial paginado de
+    `search_queries`, ordenado por `created_at desc` (`limit` acotado a
+    100). Devuelve `{total, limit, offset, items}`.
+  - `GET /search_history/{job_id}/logs` — logs de `job_logs` para un job
+    puntual, orden cronológico; `404` si el `job_id` no existe.
+  En el frontend, `App.tsx` suma un toggle "Buscar"/"Historial" en el
+  navbar (estado `view`, sin afectar el flujo de búsqueda existente) y un
+  componente nuevo `frontend/src/components/HistoryPanel.tsx` que consume
+  los tres endpoints: tabla de fuentes registradas, tabla de historial de
+  búsquedas, y un botón "Ver logs" por fila que expande los `job_logs` de
+  ese job (carga perezosa, solo al expandir). Verificado visualmente por
+  el usuario contra Docker real (captura de pantalla), datos reales de 49
+  búsquedas históricas y 7 proveedores.
+- **Bug de orden de escritura corregido (2026-09-21):** en `POST /search`
+  (`api/main.py`), el insert de `SearchQuery` en Postgres ahora ocurre
+  **antes** de `r.rpush("jobs:queue", job_id)`, no después. Antes el
+  worker podía desencolar el job y llamar a `emit()` (que escribe en
+  `job_logs`, con FK a `search_queries`) antes de que esa fila existiera,
+  disparando un `ForeignKeyViolation` best-effort en los primeros eventos
+  de cada job. Reverificado disparando una búsqueda real: el primer log
+  ("Inicializando búsqueda...") queda registrado desde el arranque, sin
+  errores de FK en los logs del worker.
 
 > Nota: `Tareas_Pendientes.csv` (snapshot de un audit anterior) todavía marca
 > el score de relevancia y el grafo como "simulados"/"Falta". Eso quedó
@@ -217,10 +242,6 @@ no tiene ni el historial en Postgres ni este archivo.
 > fuente de verdad, primero verifica contra el código.
 
 ### Lo que está a medias o pendiente
-- **Historial/logs en Postgres — persistencia lista, falta exposición:** ver
-  detalle arriba en "Lo que funciona hoy". El catálogo de proveedores
-  (`search_providers`, sembrado por `db/seed.py`) tampoco se expone todavía
-  por API ni frontend — solo existe la tabla.
 - No hay normalización de texto (solo dedupe por URL y limpieza de HTML).
 - Sin embeddings ni vector store.
 - Nube de palabras y grafo no tienen interacción (hover/click) ni filtros
@@ -297,15 +318,15 @@ un track (no solo el conteo): todos temáticamente relevantes.
 
 ### Historial y observabilidad (ver `Historias_Usuario.csv`)
 - **Exponer historial de búsquedas y catálogo de proveedores (HU-05):**
-  priorizada para la próxima sesión. El backend ya persiste todo en Postgres
-  (`search_queries`, `job_logs`, `search_providers` — ver "Lo que funciona
-  hoy"); falta la capa de lectura: endpoints en la API y vista en el
-  frontend. Hoy solo se consulta conectándose directo a la base.
+  ✅ implementado (2026-09-21), ver "Lo que funciona hoy". `GET /providers`,
+  `GET /search_history` y `GET /search_history/{job_id}/logs` en la API, y
+  el tab "Historial" en el frontend (`HistoryPanel.tsx`).
 
 ## Estructura del repo
 
 ```
-api/       FastAPI: expone /health, /search, /events (SSE), /job_result
+api/       FastAPI: expone /health, /search, /events (SSE), /job_result,
+           /providers, /search_history, /search_history/{job_id}/logs
 worker/    Loop BRPOP sobre Redis; ejecuta el pipeline de 4 etapas
   services/adapters/                 contrato SourceAdapter + SOURCE_REGISTRY (ver "Lo que funciona hoy")
   services/stackoverflow_scraper/   scraper de StackOverflow (API pública StackExchange), envuelto por StackOverflowAdapter
@@ -318,7 +339,9 @@ db/        Paquete compartido (SQLAlchemy): modelos (search_queries, job_logs,
            search_providers) + conexión Postgres + seed de proveedores. Se
            monta por volumen en api/ y worker/ (no se duplica). Ya conectado
            al pipeline (ver "Lo que funciona hoy"); falta exponerlo por API.
-frontend/  Vite + React + TS; cytoscape (grafo), d3-cloud (nube)
+frontend/  Vite + React + TS; cytoscape (grafo), d3-cloud (nube).
+           App.tsx tiene un toggle "Buscar"/"Historial" en el navbar;
+           components/HistoryPanel.tsx consume /providers y /search_history.
 config/llm_config.json   Config del gateway LLM UNAB (openai-compatible, gemma4:e2b)
 test/snapshot.py         Script de debug, no es una suite de tests
 Historias_Usuario.csv    Backlog de fuentes adicionales (HU-01..04)
@@ -407,31 +430,19 @@ adaptadores que hacen requests HTTP a terceros.
    equivalente, con las defensas de la sección 3.5 — solo http/https,
    rechazar localhost/rangos privados/metadata cloud, timeout y tamaño
    acotados) y V2EX público.
-3. **Bug preexistente detectado (no de esta sesión, pendiente de fix):** en
-   `api/main.py` (`POST /search`), `r.rpush("jobs:queue", job_id)` ocurre
-   *antes* de insertar la fila en `search_queries` (Postgres). El worker
-   puede desencolar el job y llamar a `emit()` (que escribe en `job_logs`)
-   antes de que esa fila exista, disparando un
-   `ForeignKeyViolation` best-effort (no tumba el pipeline, pero significa
-   que se pierden logs iniciales de esa corrida). Reproducido en esta sesión
-   con jobs de Hacker News, GitHub y StackOverflow por igual — no es
-   específico de ninguna fuente. Fix sugerido: mover el insert de
-   `SearchQuery` antes del `rpush`.
-4. **HU-05 — exponer historial/proveedores (rama `feature/db-search-history-logging`):**
-   la persistencia ya está conectada y probada (ver "Lo que funciona hoy").
-   Falta la capa de lectura: endpoints en la API (ej. `GET /search_history`,
-   `GET /providers`) y la vista en el frontend. Evaluar también si conviene
-   Alembic una vez el esquema empiece a cambiar más seguido (hoy
-   `init_db()` con `create_all()` alcanza).
-5. Confirmar acceso institucional UNAB a Scopus/ScienceDirect antes de tocar
+3. **HU-05 y el bug de orden de escritura — ✅ resueltos (2026-09-21)**, ver
+   "Lo que funciona hoy". Queda pendiente evaluar si conviene Alembic una
+   vez el esquema de `db/` empiece a cambiar más seguido (hoy `init_db()`
+   con `create_all()` alcanza).
+4. Confirmar acceso institucional UNAB a Scopus/ScienceDirect antes de tocar
    HU-02 (Elsevier) — no vale la pena implementar el conector sin esa
    confirmación.
-6. Si se retoma X/Twitter (HU-01), verificar primero si ya se habilitó
+5. Si se retoma X/Twitter (HU-01), verificar primero si ya se habilitó
    billing en el X Developer Portal.
-7. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
+6. Antes de citar `Tareas_Pendientes.csv` como estado actual, contrastar
    contra el código — quedó desactualizado en los puntos de IA (ver nota en
    el resumen ejecutivo).
-8. **Fallas de `infer_topic_relations` (grafo) siguen invisibles fuera de
+7. **Fallas de `infer_topic_relations` (grafo) siguen invisibles fuera de
    `docker compose logs worker`** — a diferencia de `annotate_posts` (ya
    corregido esta sesión, ver "Clasificación con `max_results` grandes"),
    `build_graph`/`infer_topic_relations` no tienen acceso a `job_id` para

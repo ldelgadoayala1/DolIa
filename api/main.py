@@ -10,7 +10,7 @@ from pydantic import BaseModel, Field
 from typing import Dict, List, Any
 
 from sse_queue import push_event, event_stream  # noqa: F401  (push_event lo usa el worker)
-from db import SearchQuery, get_session, init_db
+from db import JobLog, SearchProvider, SearchQuery, get_session, init_db
 
 # ──────────────────────────────────────────────
 app = FastAPI(title="WebScrappingUNAB API")
@@ -60,19 +60,11 @@ def search(payload: SearchPayload) -> Dict[str, Any]:
     """
     job_id = str(uuid.uuid4())
 
-    r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
-
-    # Guardar payload
-    r.set(f"job:{job_id}:payload", payload.model_dump_json(), ex=600)
-
-    # Estado inicial
-    r.set(f"job:{job_id}:status", "queued", ex=600)
-
-    # Encolar para el worker (BRPOP en el otro extremo)
-    r.rpush("jobs:queue", job_id)
-
-    # Historial en Postgres: best-effort, no debe tumbar la creación del job
-    # (Redis/SSE sigue siendo la vía crítica para que la búsqueda funcione).
+    # Historial en Postgres: se inserta antes de encolar el job en Redis para
+    # que la fila exista cuando el worker la desencole y empiece a llamar a
+    # emit() (que escribe en job_logs, con FK a esta tabla). Best-effort: si
+    # Postgres falla, no debe tumbar la creación del job (Redis/SSE sigue
+    # siendo la vía crítica para que la búsqueda funcione).
     try:
         with get_session() as session:
             session.add(SearchQuery(
@@ -84,6 +76,17 @@ def search(payload: SearchPayload) -> Dict[str, Any]:
             ))
     except Exception as e:
         print(f"[api] no se pudo registrar la búsqueda en la base de datos (job_id={job_id}): {e}")
+
+    r = redis.Redis.from_url(REDIS_URL, decode_responses=True)
+
+    # Guardar payload
+    r.set(f"job:{job_id}:payload", payload.model_dump_json(), ex=600)
+
+    # Estado inicial
+    r.set(f"job:{job_id}:status", "queued", ex=600)
+
+    # Encolar para el worker (BRPOP en el otro extremo)
+    r.rpush("jobs:queue", job_id)
 
     return {"job_id": job_id}
 
@@ -123,3 +126,93 @@ def job_result(job_id: str):
         return {"job_id": job_id, "ready": False}
 
     return {"job_id": job_id, "ready": True, "result": json.loads(raw)}
+
+
+@app.get("/providers")
+def get_providers() -> List[Dict[str, Any]]:
+    """
+    Catálogo de fuentes de búsqueda (activas, pendientes o bloqueadas),
+    sembrado por db/seed.py. Solo lectura.
+    """
+    with get_session() as session:
+        providers = session.query(SearchProvider).order_by(SearchProvider.slug).all()
+        return [
+            {
+                "slug": p.slug,
+                "display_name": p.display_name,
+                "status": p.status,
+                "description": p.description,
+                "rate_limit_info": p.rate_limit_info,
+                "requires_auth": p.requires_auth,
+            }
+            for p in providers
+        ]
+
+
+@app.get("/search_history")
+def get_search_history(limit: int = 20, offset: int = 0) -> Dict[str, Any]:
+    """
+    Historial de búsquedas (tabla search_queries), paginado y ordenado por
+    fecha de creación descendente.
+    """
+    limit = max(1, min(limit, 100))
+    offset = max(0, offset)
+
+    with get_session() as session:
+        total = session.query(SearchQuery).count()
+        rows = (
+            session.query(SearchQuery)
+            .order_by(SearchQuery.created_at.desc())
+            .offset(offset)
+            .limit(limit)
+            .all()
+        )
+        items = [
+            {
+                "job_id": q.id,
+                "query": q.query,
+                "sources": q.sources,
+                "max_results": q.max_results,
+                "status": q.status,
+                "summary": q.summary,
+                "posts_count": q.posts_count,
+                "error_message": q.error_message,
+                "created_at": q.created_at,
+                "completed_at": q.completed_at,
+            }
+            for q in rows
+        ]
+
+    return {"total": total, "limit": limit, "offset": offset, "items": items}
+
+
+@app.get("/search_history/{job_id}/logs")
+def get_search_history_logs(job_id: str) -> Dict[str, Any]:
+    """
+    Log estructurado (tabla job_logs) de una búsqueda puntual, en orden
+    cronológico.
+    """
+    with get_session() as session:
+        query_row = session.get(SearchQuery, job_id)
+        if not query_row:
+            raise HTTPException(status_code=404, detail="job_id no encontrado")
+
+        logs = (
+            session.query(JobLog)
+            .filter(JobLog.job_id == job_id)
+            .order_by(JobLog.created_at.asc())
+            .all()
+        )
+        return {
+            "job_id": job_id,
+            "logs": [
+                {
+                    "stage": log.stage,
+                    "level": log.level,
+                    "message": log.message,
+                    "data": log.data,
+                    "created_at": log.created_at,
+                }
+                for log in logs
+            ],
+        }

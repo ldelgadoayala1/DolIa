@@ -6,6 +6,7 @@ import WordCloud from "./components/WordCloud";
 import GraphView from "./components/GraphView";
 import SearchPipeline from "./components/SearchPipeline";
 import DataTable, { type PostRow } from "./components/DataTable";
+import HistoryPanel from "./components/HistoryPanel";
 
 // ✅ Tipos alineados con lo que devuelve el backend
 type WordItem = { text: string; value: number };
@@ -49,6 +50,7 @@ export default function App() {
   const [hasError,   setHasError]   = useState<boolean>(false);
   const [showDebug,  setShowDebug]  = useState<boolean>(false);
   const [stageCounts, setStageCounts] = useState<Record<string, number>>({});
+  const [view, setView] = useState<"search" | "history">("search");
 
   const apiSearchUrl  = "http://localhost:8000/search";
   const apiEventsBase = "http://localhost:8000/events";
@@ -227,118 +229,141 @@ export default function App() {
             <div className="navbar-subtitle">Universidad Andrés Bello</div>
           </div>
         </div>
+        <div className="navbar-tabs">
+          <button
+            className={`navbar-tab ${view === "search" ? "navbar-tab-active" : ""}`}
+            onClick={() => setView("search")}
+          >
+            Buscar
+          </button>
+          <button
+            className={`navbar-tab ${view === "history" ? "navbar-tab-active" : ""}`}
+            onClick={() => setView("history")}
+          >
+            Historial
+          </button>
+        </div>
         <div className="navbar-badge">MVP SSE</div>
       </nav>
 
       {/* ── LAYOUT ── */}
       <div className="app-layout">
 
-        {/* ════ SIDEBAR ════ */}
-        <aside className="app-sidebar">
-          <div className="sidebar-card">
-            <div className="sidebar-card-title">🔍 Búsqueda</div>
+        {view === "search" && (
+          <>
+            {/* ════ SIDEBAR ════ */}
+            <aside className="app-sidebar">
+              <div className="sidebar-card">
+                <div className="sidebar-card-title">🔍 Búsqueda</div>
 
-            {/* Query */}
-            <div className="form-group">
-              <label className="form-label">Dolencia / Tema</label>
-              <input
-                className="form-input"
-                value={query}
-                onChange={(e) => setQuery(e.target.value)}
-                placeholder="Ej: SQL injection"
-                onKeyDown={(e) => e.key === "Enter" && startSearch()}
-              />
-            </div>
+                {/* Query */}
+                <div className="form-group">
+                  <label className="form-label">Dolencia / Tema</label>
+                  <input
+                    className="form-input"
+                    value={query}
+                    onChange={(e) => setQuery(e.target.value)}
+                    placeholder="Ej: SQL injection"
+                    onKeyDown={(e) => e.key === "Enter" && startSearch()}
+                  />
+                </div>
 
-            {/* Max resultados */}
-            <div className="form-group">
-              <div className="range-header">
-                <label className="form-label" style={{ margin: 0 }}>
-                  Máx. resultados
-                </label>
-                <span className="range-value">{maxResults}</span>
+                {/* Max resultados */}
+                <div className="form-group">
+                  <div className="range-header">
+                    <label className="form-label" style={{ margin: 0 }}>
+                      Máx. resultados
+                    </label>
+                    <span className="range-value">{maxResults}</span>
+                  </div>
+                  <input
+                    type="range"
+                    className="form-range"
+                    min={1}
+                    max={200}
+                    value={maxResults}
+                    style={{ "--range-pct": rangePct } as React.CSSProperties}
+                    onChange={(e) => setMaxResults(Number(e.target.value))}
+                  />
+                </div>
+
+                {/* Botón buscar */}
+                <button
+                  className="btn-search"
+                  onClick={startSearch}
+                  disabled={loading}
+                >
+                  {loading ? "⏳ Buscando..." : "🔍 Buscar"}
+                </button>
               </div>
-              <input
-                type="range"
-                className="form-range"
-                min={1}
-                max={200}
-                value={maxResults}
-                style={{ "--range-pct": rangePct } as React.CSSProperties}
-                onChange={(e) => setMaxResults(Number(e.target.value))}
-              />
-            </div>
 
-            {/* Botón buscar */}
-            <button
-              className="btn-search"
-              onClick={startSearch}
-              disabled={loading}
-            >
-              {loading ? "⏳ Buscando..." : "🔍 Buscar"}
-            </button>
-          </div>
+              {/* ── Pipeline + Estado (animación de carga unificada) ── */}
+              <div className="sidebar-card">
+                <div className="sidebar-card-title">🚀 Progreso</div>
+                <SearchPipeline
+                  stage={stage}
+                  progress={progress}
+                  status={status}
+                  loading={loading}
+                  isError={isError}
+                  counts={stageCounts}
+                />
+              </div>
+            </aside>
 
-          {/* ── Pipeline + Estado (animación de carga unificada) ── */}
-          <div className="sidebar-card">
-            <div className="sidebar-card-title">🚀 Progreso</div>
-            <SearchPipeline
-              stage={stage}
-              progress={progress}
-              status={status}
-              loading={loading}
-              isError={isError}
-              counts={stageCounts}
-            />
-          </div>
-        </aside>
+            {/* ════ MAIN CONTENT ════ */}
+            <main className="app-main">
 
-        {/* ════ MAIN CONTENT ════ */}
-        <main className="app-main">
-
-          {/* ── WordCloud ── */}
-          {wordcloud.length > 0 && (
-            <section className="result-card">
-              <h2 className="result-card-title">☁️ Nube de Palabras</h2>
-              <WordCloud words={wordcloud} />
-            </section>
-          )}
-
-          {/* ── Grafo ── */}
-          {graph && (
-            <section className="result-card">
-              <h2 className="result-card-title">🕸️ Grafo de Relaciones</h2>
-              <GraphView data={graph} />
-            </section>
-          )}
-
-          {/* ── DataTable ── */}
-          {result?.posts && (
-            <section className="result-card">
-              <h2 className="result-card-title">📋 Resultados</h2>
-              {result.posts.length > 0 ? (
-                <DataTable posts={result.posts} />
-              ) : (
-                <p className="status-text">
-                  No se encontraron resultados respecto a la búsqueda actual.
-                </p>
+              {/* ── WordCloud ── */}
+              {wordcloud.length > 0 && (
+                <section className="result-card">
+                  <h2 className="result-card-title">☁️ Nube de Palabras</h2>
+                  <WordCloud words={wordcloud} />
+                </section>
               )}
-            </section>
-          )}
 
-          {/* ── Estado vacío ── */}
-          {!loading && !result && (
-            <div className="empty-state">
-              <div className="empty-icon">🔬</div>
-              <h3>Ingresa una dolencia para comenzar</h3>
-              <p>
-                El sistema analizará publicaciones de múltiples fuentes que aporten información relevante para su investigación
-              </p>
-            </div>
-          )}
+              {/* ── Grafo ── */}
+              {graph && (
+                <section className="result-card">
+                  <h2 className="result-card-title">🕸️ Grafo de Relaciones</h2>
+                  <GraphView data={graph} />
+                </section>
+              )}
 
+              {/* ── DataTable ── */}
+              {result?.posts && (
+                <section className="result-card">
+                  <h2 className="result-card-title">📋 Resultados</h2>
+                  {result.posts.length > 0 ? (
+                    <DataTable posts={result.posts} />
+                  ) : (
+                    <p className="status-text">
+                      No se encontraron resultados respecto a la búsqueda actual.
+                    </p>
+                  )}
+                </section>
+              )}
 
-        </main>
+              {/* ── Estado vacío ── */}
+              {!loading && !result && (
+                <div className="empty-state">
+                  <div className="empty-icon">🔬</div>
+                  <h3>Ingresa una dolencia para comenzar</h3>
+                  <p>
+                    El sistema analizará publicaciones de múltiples fuentes que aporten información relevante para su investigación
+                  </p>
+                </div>
+              )}
+
+            </main>
+          </>
+        )}
+
+        {view === "history" && (
+          <main className="app-main" style={{ width: "100%" }}>
+            <HistoryPanel />
+          </main>
+        )}
       </div>
     </div>
   );
