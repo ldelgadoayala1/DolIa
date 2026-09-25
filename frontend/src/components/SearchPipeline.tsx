@@ -6,6 +6,7 @@ type Stage = {
 };
 
 const STAGES: Stage[] = [
+  { key: "planning",    icon: "🧭", label: "Plan" },
   { key: "scraping",    icon: "🔍", label: "Scraping" },
   { key: "classifying", icon: "🤖", label: "IA" },
   { key: "building",    icon: "📊", label: "Gráficos" },

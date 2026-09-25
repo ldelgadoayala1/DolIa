@@ -8,6 +8,10 @@ from typing import Any, Dict, List, Protocol
 
 class SourceAdapter(Protocol):
     name: str
+    # Qué tipo de contenido cubre la fuente. Lo lee el planificador de
+    # fuentes (services/ai/source_planner.py) para decidir cuántos posts
+    # pedirle a cada una: con solo el nombre, el LLM adivina mal (HU-06).
+    description: str
 
     def check(self) -> Dict[str, Any]:
         """Diagnóstico de solo lectura: disponibilidad y motivo si no aplica."""

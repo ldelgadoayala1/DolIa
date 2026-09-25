@@ -23,6 +23,11 @@ def _normalize(raw_post: Dict[str, Any]) -> Dict[str, Any]:
 
 class RSSAdapter:
     name = "rss"
+    description = (
+        "Noticias de prensa vía Google News (búsqueda de texto libre, en "
+        "cualquier idioma). Aporta en casi cualquier tema de actualidad, "
+        "social, político o económico."
+    )
 
     def check(self) -> Dict[str, Any]:
         return {"available": True, "name": self.name, "reason": None}

@@ -77,6 +77,79 @@ FORMATO JSON ESPERADO:
     return prompt
 
 
+PLANNER_SYSTEM_PROMPT = """
+Eres un planificador que decide en qué fuentes de información buscar.
+
+Tu única tarea es responder JSON válido.
+
+NO expliques.
+NO converses.
+NO des ejemplos.
+NO escribas markdown.
+
+La respuesta DEBE ser JSON válido.
+"""
+
+
+def build_planning_prompt(
+    query: str,
+    sources: List[Dict[str, Any]],
+    budget: int,
+    per_source_cap: int,
+) -> str:
+    """
+    Arma el prompt para que el LLM reparta un presupuesto de posts entre las
+    fuentes (HU-06). Cada fuente llega con su descripción y los títulos que
+    devolvió el sondeo previo: el LLM decide viendo evidencia real, no solo
+    el nombre de la fuente (con solo el nombre adivinaba mal).
+    `sources`: [{"name", "description", "hits", "probe_size", "titles"}].
+    """
+    blocks = []
+    for source in sources:
+        titles = "\n".join(f"  - {title}" for title in source["titles"]) or "  (sin resultados)"
+        blocks.append(
+            f"""Fuente: {source["name"]}
+Descripción: {source["description"]}
+Resultados del sondeo: {source["hits"]} de {source["probe_size"]} pedidos
+Títulos de muestra:
+{titles}"""
+        )
+    formatted_sources = "\n\n".join(blocks)
+
+    prompt = f"""
+El usuario quiere investigar un tema. Antes de descargar resultados, se hizo
+un sondeo rápido en cada fuente. Decide cuántos posts pedirle a cada fuente
+para obtener los resultados más relevantes sin descargar contenido inútil.
+
+TEMA BUSCADO:
+{query}
+
+FUENTES:
+{formatted_sources}
+
+Reglas:
+- Reparte en total aproximadamente {budget} posts entre las fuentes.
+- Máximo {per_source_cap} posts por fuente.
+- Asigna 0 a las fuentes cuyos títulos de muestra no tienen relación con el
+  tema buscado, aunque hayan devuelto resultados.
+- Asigna más posts a las fuentes cuyos títulos de muestra son más relevantes.
+- Usa exactamente los nombres de fuente indicados arriba.
+
+Devuelve SOLO JSON válido, sin markdown, sin texto fuera del JSON.
+El JSON debe ser parseable directamente con json.loads().
+
+FORMATO JSON ESPERADO:
+{{
+    "allocations": [
+        {{"source": "nombre_fuente", "posts": 10}},
+        "repetir para cada fuente..."
+    ]
+}}
+"""
+
+    return prompt
+
+
 GRAPH_SYSTEM_PROMPT = """
 Eres un analista que identifica relaciones semánticas entre temas técnicos.
 

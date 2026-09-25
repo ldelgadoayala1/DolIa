@@ -2,13 +2,15 @@ import os
 import re
 import json
 from collections import Counter, defaultdict
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-from typing import Dict, Any, List
+from typing import Any, Callable, Dict, List
 
 import redis
 from services.adapters.registry import get_adapter
 from services.ai.annotator import annotate_posts
 from services.ai.relations import infer_topic_relations
+from services.ai.source_planner import PROBE_SIZE, plan_sources
 
 from sse_queue import push_event
 from db import JobLog, SearchQuery, get_session, init_db
@@ -34,7 +36,29 @@ REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
 # clasificación por fuente sin que se achique a medida que se agregan
 # adaptadores nuevos. La selección final de los max_results mejores posts la
 # hace la IA (relevance_score), no el reparto de cupo en el scraping.
+# Desde HU-06 es solo el techo: el cupo real de cada fuente lo decide el
+# planificador (services/ai/source_planner.py) a partir de un sondeo previo.
 PER_SOURCE_CAP = 30
+
+
+def _run_per_source(adapters: List[Any], fn: Callable[[Any], List[Dict[str, Any]]]) -> Dict[str, Any]:
+    """
+    Ejecuta fn(adapter) para cada fuente en paralelo (son llamadas HTTP
+    independientes a terceros). Devuelve {nombre: posts | Exception}: la
+    falla de una fuente no cancela las demás.
+    """
+    if not adapters:
+        return {}
+
+    def safe(adapter: Any) -> Any:
+        try:
+            return fn(adapter)
+        except Exception as e:
+            return e
+
+    with ThreadPoolExecutor(max_workers=len(adapters)) as pool:
+        results = pool.map(safe, adapters)
+        return {adapter.name: result for adapter, result in zip(adapters, results)}
 
 
 def _persist_log(job_id: str, stage: str, level: str, message: str, data: Dict[str, Any] | None) -> None:
@@ -216,35 +240,95 @@ def worker_loop():
             max_results = int(payload.get("max_results", 30))
 
             _update_query(job_id, status="running")
-            emit(job_id, "scraping", 5, "Inicializando búsqueda...")
+            emit(job_id, "planning", 3, "Inicializando búsqueda...")
 
             active_adapters = []
             for source_name in sources:
                 adapter = get_adapter(source_name)
                 if adapter is None:
-                    emit(job_id, "scraping", 10, f"Fuente desconocida: {source_name}",
+                    emit(job_id, "planning", 4, f"Fuente desconocida: {source_name}",
                          data={"source": source_name})
                     continue
                 active_adapters.append(adapter)
 
-            # Pedirle a cada fuente hasta PER_SOURCE_CAP posts (tope fijo, no
-            # repartido entre la cantidad de fuentes activas) para que la IA
-            # tenga un pool real del que elegir los max_results mejores, en
-            # vez de que el scraper decida de antemano cuántos aporta cada
-            # fuente en partes iguales.
+            # Techo por fuente: el planificador nunca asigna más que esto.
             per_source_limit = min(max_results, PER_SOURCE_CAP)
 
-            real_posts: List[Dict[str, Any]] = []
+            # --- Pre-scraping (HU-06): sondeo barato de cada fuente, sin IA ---
+            emit(job_id, "planning", 6,
+                 f"Sondeando {len(active_adapters)} fuentes para decidir dónde buscar...")
+            probe_results = _run_per_source(
+                active_adapters, lambda adapter: adapter.search(query, PROBE_SIZE))
 
+            probes: List[Dict[str, Any]] = []
             for adapter in active_adapters:
-                emit(job_id, "scraping", 20, f"Consultando {adapter.name}...",
-                     data={"source": adapter.name})
-                try:
-                    real_posts.extend(adapter.search(query, per_source_limit))
-                except Exception as e:
-                    emit(job_id, "scraping", 20, f"Fuente {adapter.name} falló: {e}",
+                result = probe_results[adapter.name]
+                if isinstance(result, Exception):
+                    emit(job_id, "planning", 8,
+                         f"Fuente {adapter.name} falló en el sondeo, se omite: {result}",
                          data={"source": adapter.name})
-                    print(f"[worker] fuente {adapter.name} falló job_id={job_id}: {e}")
+                    print(f"[worker] sondeo de {adapter.name} falló job_id={job_id}: {result}")
+                    result = []
+                probes.append({
+                    "name": adapter.name,
+                    "description": adapter.description,
+                    "posts": result,
+                })
+
+            probe_hits = {p["name"]: len(p["posts"]) for p in probes}
+            emit(job_id, "planning", 10, "Decidiendo con IA en qué fuentes buscar...",
+                 data={"probe_hits": probe_hits})
+
+            allocations, plan_error = plan_sources(query, probes, max_results, per_source_limit)
+            if plan_error:
+                emit(job_id, "planning", 12,
+                     "⚠️ El planificador de IA falló; se reparte según el sondeo",
+                     data={"error": plan_error})
+
+            chosen = {name: n for name, n in allocations.items() if n > 0}
+            skipped = [name for name, n in allocations.items() if n == 0]
+            plan_status = "Plan: " + (", ".join(f"{name} {n}" for name, n in chosen.items())
+                                      or "ninguna fuente con resultados")
+            if skipped:
+                plan_status += f" (omitidas: {', '.join(skipped)})"
+            emit(job_id, "planning", 15, plan_status,
+                 data={"allocations": allocations, "fallback": plan_error is not None})
+
+            # --- Scraping según el plan ---
+            # Si el cupo cabe en lo que ya trajo el sondeo, no se vuelve a
+            # consultar esa fuente.
+            probe_posts = {p["name"]: p["posts"] for p in probes}
+            to_fetch = [a for a in active_adapters
+                        if allocations.get(a.name, 0) > len(probe_posts[a.name])]
+            if to_fetch:
+                emit(job_id, "scraping", 20,
+                     f"Consultando {', '.join(a.name for a in to_fetch)}...",
+                     data={"sources": [a.name for a in to_fetch]})
+            fetch_results = _run_per_source(
+                to_fetch, lambda adapter: adapter.search(query, allocations[adapter.name]))
+
+            real_posts: List[Dict[str, Any]] = []
+            for adapter in active_adapters:
+                limit = allocations.get(adapter.name, 0)
+                if limit == 0:
+                    continue
+                fetched = fetch_results.get(adapter.name, [])
+                if isinstance(fetched, Exception):
+                    emit(job_id, "scraping", 30,
+                         f"Fuente {adapter.name} falló: {fetched} — se usan los resultados del sondeo",
+                         data={"source": adapter.name})
+                    print(f"[worker] fuente {adapter.name} falló job_id={job_id}: {fetched}")
+                    fetched = []
+                # El sondeo suele ser un prefijo de la búsqueda completa: se
+                # unen ambos sin repetir URL y se corta al cupo asignado.
+                source_urls: set = set()
+                source_posts: List[Dict[str, Any]] = []
+                for post in fetched + probe_posts[adapter.name]:
+                    if post.get("url") in source_urls:
+                        continue
+                    source_urls.add(post.get("url"))
+                    source_posts.append(post)
+                real_posts.extend(source_posts[:limit])
 
             seen_urls: set = set()
             deduped_posts: List[Dict[str, Any]] = []
@@ -262,7 +346,11 @@ def worker_loop():
             if real_posts:
                 emit(job_id, "classifying", 55,
                      "Analizando relevancia y filtrando contenido inapropiado con IA...")
-                real_posts, annotation_errors = annotate_posts(query, real_posts)
+                def on_batch(current: int, total: int) -> None:
+                    emit(job_id, "classifying", 55 + round(18 * (current - 1) / total),
+                         f"Analizando con IA: lote {current} de {total}...")
+
+                real_posts, annotation_errors = annotate_posts(query, real_posts, on_batch=on_batch)
 
                 if annotation_errors:
                     emit(job_id, "classifying", 60,

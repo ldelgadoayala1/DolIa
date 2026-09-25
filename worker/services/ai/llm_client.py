@@ -17,6 +17,11 @@ with open(LLM_CONFIG_PATH, "r", encoding="utf-8") as f:
 BASE_URL = CONFIG["base_url"].rstrip("/")
 CHAT_URL = BASE_URL + CONFIG["endpoints"]["chat_completions"]
 DEFAULT_MODEL = CONFIG.get("model", "gemma4:e2b")
+# Modelo para el planificador de fuentes (HU-06), separado del de
+# clasificación para poder moverlo a un modelo más chico/rápido sin tocar
+# código cuando el gateway lo habilite. Hoy el gateway tiene un solo modelo
+# activo (gemma4:26b), ver CLAUDE.md "Rendimiento y uso de IA".
+PLANNER_MODEL = CONFIG.get("planner_model") or DEFAULT_MODEL
 
 API_KEY = os.getenv("LLM_API_KEY", "")
 
@@ -30,6 +35,7 @@ def chat_completion(
     user_prompt: str,
     model: str | None = None,
     temperature: float = 0,
+    timeout: float = 300,
 ) -> str:
     """
     Llama al gateway (estilo OpenAI chat/completions) y retorna
@@ -49,7 +55,7 @@ def chat_completion(
         "temperature": temperature,
     }
 
-    response = requests.post(CHAT_URL, headers=headers, json=payload, timeout=300)
+    response = requests.post(CHAT_URL, headers=headers, json=payload, timeout=timeout)
 
     if response.status_code != 200:
         raise RuntimeError(
@@ -60,7 +66,27 @@ def chat_completion(
     return raw_response["choices"][0]["message"]["content"]
 
 
-def call_llm_json(system_prompt: str, user_prompt: str, model: str | None = None) -> dict:
+def _strip_code_fence(content: str) -> str:
+    """
+    El modelo a veces envuelve el JSON en ```json ... ``` pese a que el
+    system prompt pide no usar markdown (visto en pruebas contra el gateway,
+    2026-09-25). Se quita la cerca antes de json.loads().
+    """
+    text = content.strip()
+    if text.startswith("```"):
+        text = text.split("\n", 1)[1] if "\n" in text else ""
+        if text.rstrip().endswith("```"):
+            text = text.rstrip()[:-3]
+    return text.strip()
+
+
+def call_llm_json(
+    system_prompt: str,
+    user_prompt: str,
+    model: str | None = None,
+    timeout: float = 300,
+    attempts: int = 3,
+) -> dict:
     """
     Llama al LLM esperando una respuesta JSON válida y la parsea. Reintenta
     hasta 3 veces con backoff exponencial (mismo patrón que los scrapers,
@@ -69,23 +95,27 @@ def call_llm_json(system_prompt: str, user_prompt: str, model: str | None = None
     JSON inválido; en ambos casos, reintentar recupera la mayoría de los
     casos en vez de degradar el lote entero a valores por defecto en el
     primer hipo.
+
+    `timeout`/`attempts` permiten acotar llamadas que deben ser rápidas (ej.
+    el planificador de fuentes, HU-06): con los valores por defecto una
+    llamada colgada puede tardar hasta ~15 min antes de rendirse.
     """
     last_error: Exception | None = None
 
-    for attempt in range(3):
+    for attempt in range(attempts):
         try:
-            content = chat_completion(system_prompt, user_prompt, model=model)
+            content = chat_completion(system_prompt, user_prompt, model=model, timeout=timeout)
         except requests.exceptions.RequestException as e:
             last_error = RuntimeError(f"Error de red llamando al LLM: {e}")
         except RuntimeError as e:
             last_error = e
         else:
             try:
-                return json.loads(content)
+                return json.loads(_strip_code_fence(content))
             except json.JSONDecodeError as e:
                 last_error = RuntimeError(f"Error parseando JSON del LLM: {e}. Contenido: {content}")
 
-        if attempt < 2:
+        if attempt < attempts - 1:
             time.sleep(2 ** attempt)
 
     raise last_error

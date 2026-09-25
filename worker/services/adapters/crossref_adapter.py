@@ -23,6 +23,11 @@ def _normalize(raw_post: Dict[str, Any]) -> Dict[str, Any]:
 
 class CrossRefAdapter:
     name = "crossref"
+    description = (
+        "Literatura académica (artículos, papers, libros) indexada en "
+        "CrossRef. Búsqueda de texto libre; aporta en temas de investigación "
+        "de cualquier disciplina (ciencias sociales, salud, educación, etc.)."
+    )
 
     def check(self) -> Dict[str, Any]:
         return {"available": True, "name": self.name, "reason": None}

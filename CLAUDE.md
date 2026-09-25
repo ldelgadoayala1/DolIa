@@ -15,7 +15,7 @@ desactualizado (no dejes que se pudra).
 > código. Si el cambio no altera nada de lo documentado aquí, no hace falta
 > tocarlo.
 
-## Resumen ejecutivo (2026-09-21)
+## Resumen ejecutivo (2026-09-25)
 
 **Arquitectura:** FastAPI (`api`) + worker Python + Redis (cola/caché en caliente,
 TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlchemy)
@@ -36,8 +36,10 @@ no tiene ni el historial en Postgres ni este archivo.
 - Pipeline de 4 etapas end-to-end vía SSE (`/search`, `/events`, `/job_result`)
   con scraping funcional de **StackOverflow, GitHub Issues, Hacker News,
   RSS/Atom (noticias vía Google News) y CrossRef** (cinco fuentes activas).
-  El frontend ya no deja elegir fuente — cada búsqueda consulta
-  automáticamente todas las implementadas (ver más abajo).
+  El frontend ya no deja elegir fuente — cada búsqueda manda todas las
+  implementadas y un planificador de IA (HU-06) decide, tras un sondeo
+  rápido, cuáles consultar a fondo y con qué cupo (ver "Rendimiento y uso
+  de IA").
 - **CrossRef (adaptador nuevo, 2026-09-19):** `CrossRefAdapter` envuelve
   `worker/services/crossref_scraper/crossref_scraper_service.py`, que pega
   contra la API pública de búsqueda de CrossRef (`api.crossref.org/works`,
@@ -246,7 +248,9 @@ no tiene ni el historial en Postgres ni este archivo.
 - Sin embeddings ni vector store.
 - Nube de palabras y grafo no tienen interacción (hover/click) ni filtros
   coordinados con el listado — cada visualización es independiente.
-- Sin tests (solo `test/snapshot.py`, un script de debug).
+- Tests mínimos: solo `worker/tests/test_source_planner.py` (planificador,
+  HU-06). Los adaptadores siguen sin tests (`test/snapshot.py` es un
+  script de debug, no una suite).
 - Sin README de usuario final (este archivo cubre ese hueco parcialmente).
 
 ### Fuentes adicionales (ver `Historias_Usuario.csv`)
@@ -322,6 +326,65 @@ un track (no solo el conteo): todos temáticamente relevantes.
   `GET /search_history` y `GET /search_history/{job_id}/logs` en la API, y
   el tab "Historial" en el frontend (`HistoryPanel.tsx`).
 
+### Rendimiento y uso de IA (ver `Historias_Usuario.csv`)
+- **Pre-scraping / planificación de fuentes por IA (HU-06):** ✅
+  implementado (2026-09-25). Antes cada búsqueda pedía hasta 30 posts a
+  **cada** fuente (~150 posts con 5 fuentes) y todos pasaban por
+  `annotate_posts`, aunque en los tracks del debut StackOverflow/HN aportan
+  0; un job con `max_results=30` tardaba ~8 min y el frontend lo perdía
+  por el timeout SSE absoluto de 240s. Ahora:
+  1. **Sondeo** (`planning`): `PROBE_SIZE=5` posts por fuente, en paralelo,
+     sin IA (~1-3s).
+  2. **Plan**: `plan_sources()` (`worker/services/ai/source_planner.py`)
+     le pasa al LLM (`planner_model` de `config/llm_config.json`, timeout
+     60s, 2 intentos) la consulta, la `description` de cada adaptador y
+     los títulos del sondeo, con un presupuesto de
+     `max_results * POOL_FACTOR` (1.5). `normalize_allocations()` acota la
+     respuesta con reglas deterministas: 0 a fuentes sin resultados en el
+     sondeo, una fuente que devolvió <5 no puede recibir más de lo que
+     devolvió, tope `PER_SOURCE_CAP`, presupuesto total, y completa hasta
+     `max_results` si el LLM fue mezquino. Si el LLM falla o asigna 0 a
+     todo → `fallback_allocations()` (proporcional al sondeo) + aviso en
+     `job_logs`/SSE. El plan se emite como evento (`data.allocations`).
+  3. **Scraping** en paralelo solo de las fuentes con cupo; si el cupo
+     cabe en lo que ya trajo el sondeo, la fuente no se vuelve a consultar.
+  Además: `annotate_posts` emite un evento por lote (`on_batch`) y el SSE
+  (`api/sse_queue.py`) corta por **inactividad** (600s sin eventos) en
+  vez de por duración total. Tests unitarios en
+  `worker/tests/test_source_planner.py` (16, sin gateway: `cd worker &&
+  python -m unittest discover -s tests`). **Verificado contra Docker:**
+  track de violencia de género, `max_results=30` → 114s (antes ~8 min),
+  45 posts clasificados (antes ~90), plan RSS 23/CrossRef 22 con SO/HN/
+  GitHub omitidas, 30/30 con relevancia real (90-100). Consulta técnica
+  ("fastapi server sent events connection timeout", 16) → 97s, plan
+  GitHub 10/CrossRef 6/StackOverflow 2, RSS/HN omitidas — el planificador
+  sí cambia de fuentes según el tema. El planificador cuesta ~15-17s
+  (una llamada; el modelo razona internamente, ver abajo).
+  **Hallazgos del gateway** (`GET /models` y pruebas directas a
+  `/chat/completions`, 2026-09-25):
+  - Solo hay **un** modelo habilitado: `gemma4:26b`. `gemma4:e2b` (el de
+    `config/llm_config.json`) es un alias que el gateway resuelve a 26b (la
+    respuesta dice `"model":"gemma4:26b"`); cualquier otro nombre (ej.
+    `gemma3:1b`, `llama3.2:3b`) devuelve 400 "El modelo habilitado ahora
+    es 'gemma4:26b'". **No hay un modelo más chico para elegir** hoy.
+    `qwen3.8:27b` (sugerido por el usuario) es la excepción: el gateway lo
+    acepta (200) pero también lo resuelve a `gemma4:26b` — está registrado
+    como nombre pero no habilitado. El texto "el modelo habilitado *ahora*"
+    sugiere que el gateway tiene un solo modelo activo a la vez y que puede
+    rotar; volver a consultar `GET /models` antes de asumir que qwen ya
+    responde (verificar el campo `model` de la respuesta, no solo el 200).
+  - El modelo razona internamente y eso **no se puede apagar**:
+    `reasoning_effort: "none"`, `think: false` y
+    `chat_template_kwargs.enable_thinking: false` se ignoran — ~750-860
+    tokens de completion ocultos y ~7s por llamada aun con prompt mínimo.
+    Implica que el costo dominante es la **cantidad de llamadas**, no su
+    tamaño: optimizar = menos posts a clasificar, no otro modelo.
+  - Con solo los nombres de las fuentes, el planificador le asignó 12 posts
+    a Hacker News en un track donde HN real devuelve 0 — el prompt de
+    planificación necesita una descripción de qué cubre cada fuente (y
+    eventualmente evidencia real), no solo el nombre. Por eso el diseño
+    final usa sondeo + descripción, no solo el nombre.
+
 ## Estructura del repo
 
 ```
@@ -334,34 +397,39 @@ worker/    Loop BRPOP sobre Redis; ejecuta el pipeline de 4 etapas
   services/hackernews_scraper/      scraper de Hacker News (Algolia HN Search API), envuelto por HackerNewsAdapter
   services/rss_scraper/             scraper de RSS/Atom (Google News RSS search), envuelto por RSSAdapter
   services/crossref_scraper/        scraper de literatura académica (CrossRef Works API), envuelto por CrossRefAdapter
-  services/ai/                      llm_client, prompt_builder, annotator, relations, response_parser
+  services/ai/                      llm_client, prompt_builder, annotator, relations, response_parser, source_planner (HU-06)
+  tests/                            unittest del planificador (python -m unittest discover -s tests)
 db/        Paquete compartido (SQLAlchemy): modelos (search_queries, job_logs,
            search_providers) + conexión Postgres + seed de proveedores. Se
-           monta por volumen en api/ y worker/ (no se duplica). Ya conectado
-           al pipeline (ver "Lo que funciona hoy"); falta exponerlo por API.
+           monta por volumen en api/ y worker/ (no se duplica). Conectado
+           al pipeline y expuesto por API (HU-05, ver "Lo que funciona hoy").
 frontend/  Vite + React + TS; cytoscape (grafo), d3-cloud (nube).
            App.tsx tiene un toggle "Buscar"/"Historial" en el navbar;
            components/HistoryPanel.tsx consume /providers y /search_history.
 config/llm_config.json   Config del gateway LLM UNAB (openai-compatible, gemma4:e2b)
 test/snapshot.py         Script de debug, no es una suite de tests
-Historias_Usuario.csv    Backlog de fuentes adicionales (HU-01..04)
+Historias_Usuario.csv    Backlog de historias de usuario (HU-01..06)
 Tareas_Pendientes.csv    Audit de arquitectura — desactualizado en partes, ver nota arriba
 INSTRUCCIONES_IA.md      Guía de integración de adaptadores de fuentes (idea tomada de "Agent Reach")
 ```
 
 ## Pipeline del worker (`worker/main.py`)
 
-1. **scraping** — por cada fuente en `payload.sources`, busca el adaptador en
-   `SOURCE_REGISTRY` (`worker/services/adapters/registry.py`) y le pide hasta
-   `per_source_limit = min(max_results, PER_SOURCE_CAP)` posts (tope fijo por
-   fuente, `PER_SOURCE_CAP = 30`, **no** repartido en partes iguales entre la
-   cantidad de fuentes activas — ver "`max_results` es un total... y lo
-   elige la IA, no el scraper" arriba). Posts normalizados de todas las
-   fuentes se acumulan y dedupean por URL. Fuente desconocida o que falla →
-   aviso y se sigue con las demás (hoy `"stackoverflow"`, `"github"`,
-   `"hackernews"`, `"rss"` y `"crossref"` registradas).
+0. **planning** (HU-06) — busca cada fuente de `payload.sources` en
+   `SOURCE_REGISTRY` (`worker/services/adapters/registry.py`), sondea
+   `PROBE_SIZE` posts de cada una en paralelo y `plan_sources()` decide el
+   cupo por fuente (0 = no consultar), acotado por
+   `per_source_limit = min(max_results, PER_SOURCE_CAP)` (`PER_SOURCE_CAP =
+   30`) — ver "Rendimiento y uso de IA". Fuente desconocida o que falla en
+   el sondeo → aviso y se omite, sin cancelar las demás (hoy
+   `"stackoverflow"`, `"github"`, `"hackernews"`, `"rss"` y `"crossref"`
+   registradas).
+1. **scraping** — pide a cada fuente con cupo `allocations[fuente]` posts,
+   en paralelo (salta las fuentes cuyo cupo ya cubre el sondeo). Posts
+   normalizados de todas las fuentes se acumulan y dedupean por URL. Si la
+   búsqueda completa de una fuente falla, se usan sus posts del sondeo.
 2. **classifying** — `annotate_posts`: relevancia + tag + moderación vía LLM
-   por lotes de 15; se descartan los posts marcados `flagged`. Después se
+   por lotes de 8; se descartan los posts marcados `flagged`. Después se
    ordena por `relevance_score` (desc) y se corta a `max_results` — el total
    final es `max_results`, no `max_results` por fuente.
 3. **building** — `build_graph` (relaciones vía LLM + fallback de
@@ -413,6 +481,13 @@ adaptadores que hacen requests HTTP a terceros.
 
 ## Para la próxima sesión
 
+0. **HU-06 (pre-scraping por IA) — ✅ implementada (2026-09-25)**, ver
+   "Rendimiento y uso de IA". Pendientes menores: (a) cuando el gateway
+   habilite un modelo chico (o `qwen3.8:27b` de verdad), cambiar
+   `planner_model` en `config/llm_config.json` y verificar el campo
+   `model` de la respuesta; (b) el frontend todavía no muestra el plan
+   (`data.allocations`) más allá del texto de estado — solo queda en
+   `job_logs`/historial.
 1. **Adaptador de CrossRef — ✅ implementado y verificado contra los 5 tracks
    completos del debut (2026-09-19)**, ver "Lo que funciona hoy" y "Testeo
    contra los tracks del debut" (hueco cerrado). Candidato secundario, no

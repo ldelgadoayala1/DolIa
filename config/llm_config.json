@@ -6,5 +6,6 @@
     "models": "/models",
     "chat_completions": "/chat/completions"
   },
-  "model": "gemma4:e2b"
+  "model": "gemma4:e2b",
+  "planner_model": "gemma4:26b"
 }

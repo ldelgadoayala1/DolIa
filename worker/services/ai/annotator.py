@@ -1,4 +1,4 @@
-from typing import Any, Dict, List, Tuple
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from .llm_client import call_llm_json
 from .prompt_builder import SYSTEM_PROMPT, build_annotation_prompt
@@ -9,6 +9,7 @@ def annotate_posts(
     query: str,
     posts: List[Dict[str, Any]],
     batch_size: int = 8,
+    on_batch: Optional[Callable[[int, int], None]] = None,
 ) -> Tuple[List[Dict[str, Any]], List[str]]:
     """
     Agrega relevance_score, tag y flagged (moderación de contenido) a cada
@@ -29,11 +30,19 @@ def annotate_posts(
     fallaron (con el motivo) para que el caller pueda avisarlo vía
     emit()/job_logs — antes esto solo quedaba en un print() a stdout,
     invisible fuera de los logs crudos del contenedor.
+
+    on_batch(lote_actual, total_lotes), si se pasa, se llama antes de cada
+    lote: el caller lo usa para emitir progreso por SSE, así la etapa de
+    clasificación no queda varios minutos sin eventos.
     """
     batch_errors: List[str] = []
+    total_batches = (len(posts) + batch_size - 1) // batch_size
 
     for start in range(0, len(posts), batch_size):
         batch = posts[start:start + batch_size]
+
+        if on_batch is not None:
+            on_batch(start // batch_size + 1, total_batches)
 
         try:
             prompt = build_annotation_prompt(query, batch)

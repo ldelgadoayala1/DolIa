@@ -23,6 +23,11 @@ def _normalize(raw_post: Dict[str, Any]) -> Dict[str, Any]:
 
 class GitHubAdapter:
     name = "github"
+    description = (
+        "Issues de repositorios de GitHub (bugs, workarounds, discusiones de "
+        "proyectos de software). Búsqueda literal por palabras clave; aporta "
+        "sobre todo en temas técnicos o de herramientas/proyectos open source."
+    )
 
     def check(self) -> Dict[str, Any]:
         return {"available": True, "name": self.name, "reason": None}

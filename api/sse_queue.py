@@ -5,7 +5,13 @@ import redis
 from typing import Generator
 
 REDIS_URL = os.getenv("REDIS_URL", "redis://redis:6379/0")
-STREAM_TIMEOUT = 240  # segundos máximo esperando eventos (scrape + 2 lotes de anotación + relaciones de grafo, todo vía LLM)
+# Segundos máximos SIN recibir eventos antes de cortar el stream. Antes era
+# un límite absoluto de 240s para todo el job, y un job con max_results=30
+# tarda ~8 min: el frontend recibía "Stream timeout" con el worker todavía
+# trabajando (HU-06). Ahora el plazo se reinicia con cada evento; el worker
+# emite uno por lote de clasificación, así que solo se corta si el job queda
+# realmente colgado. 600s = mismo TTL que las claves del job en Redis.
+STREAM_IDLE_TIMEOUT = 600
 
 
 def push_event(job_id: str, event: dict) -> None:
@@ -26,7 +32,7 @@ def event_stream(job_id: str) -> Generator[str, None, None]:
     key = f"job:{job_id}:events"
     status_key = f"job:{job_id}:status"
     index = 0
-    deadline = time.time() + STREAM_TIMEOUT
+    deadline = time.time() + STREAM_IDLE_TIMEOUT
 
     # Evento inicial de conexión
     yield f"data: {json.dumps({'type': 'connected', 'job_id': job_id})}\n\n"
@@ -34,6 +40,9 @@ def event_stream(job_id: str) -> Generator[str, None, None]:
     while time.time() < deadline:
         # Leer todos los eventos nuevos desde el índice actual
         events = r.lrange(key, index, -1)
+
+        if events:
+            deadline = time.time() + STREAM_IDLE_TIMEOUT
 
         for raw in events:
             index += 1

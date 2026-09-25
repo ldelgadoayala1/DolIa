@@ -23,6 +23,11 @@ def _normalize(raw_post: Dict[str, Any]) -> Dict[str, Any]:
 
 class StackOverflowAdapter:
     name = "stackoverflow"
+    description = (
+        "Preguntas y respuestas de programación (StackOverflow). Búsqueda "
+        "literal por palabras clave, mayormente en inglés; solo aporta en "
+        "temas técnicos de software."
+    )
 
     def check(self) -> Dict[str, Any]:
         return {"available": True, "name": self.name, "reason": None}

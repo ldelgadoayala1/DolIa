@@ -23,6 +23,11 @@ def _normalize(raw_post: Dict[str, Any]) -> Dict[str, Any]:
 
 class HackerNewsAdapter:
     name = "hackernews"
+    description = (
+        "Historias compartidas en Hacker News (comunidad de tecnología y "
+        "startups, en inglés). Búsqueda literal por palabras clave; aporta "
+        "en temas de tecnología, industria tech e IA."
+    )
 
     def check(self) -> Dict[str, Any]:
         return {"available": True, "name": self.name, "reason": None}
