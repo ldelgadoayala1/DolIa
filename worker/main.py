@@ -186,6 +186,7 @@ def run_llm_aggregate(
     query: str,
     max_results: int = 10,
     posts: List[Dict[str, Any]] | None = None,
+    include_graph: bool = True,
 ) -> Dict[str, Any]:
     """
     Retorna estructura para el frontend:
@@ -206,7 +207,8 @@ def run_llm_aggregate(
     return {
         "summary": summary,
         "wordcloud": build_wordcloud(posts),
-        "graph": build_graph(query, posts),
+        # El grafo cuesta una llamada al LLM; se omite si el frontend no lo pide.
+        "graph": build_graph(query, posts) if include_graph else None,
         "posts": posts,
     }
 
@@ -237,7 +239,8 @@ def worker_loop():
             payload = json.loads(payload_raw)
             query = payload["query"]
             sources = payload.get("sources", ["stackoverflow"])
-            max_results = int(payload.get("max_results", 30))
+            max_results = int(payload.get("max_results", 10))
+            include_graph = bool(payload.get("include_graph", True))
 
             _update_query(job_id, status="running")
             emit(job_id, "planning", 3, "Inicializando búsqueda...")
@@ -375,11 +378,14 @@ def worker_loop():
                     status += f" ({flagged_count} descartados por contenido inapropiado)"
                 emit(job_id, "classifying", 75, status, data={"count": len(real_posts)})
 
-            emit(job_id, "building", 85, "Construyendo grafo de relaciones semánticas...")
+            emit(job_id, "building", 85,
+                 "Construyendo grafo de relaciones semánticas..." if include_graph
+                 else "Generando nube de palabras...")
             result = run_llm_aggregate(
                 query=query,
                 posts=real_posts,
                 max_results=max_results,
+                include_graph=include_graph,
             )
             emit(job_id, "building", 95, "Generando nube de palabras y gráficos...",
                  data={"count": len(real_posts)})

@@ -15,13 +15,18 @@ desactualizado (no dejes que se pudra).
 > código. Si el cambio no altera nada de lo documentado aquí, no hace falta
 > tocarlo.
 
-## Resumen ejecutivo (2026-09-25)
+## Resumen ejecutivo (2026-09-28)
 
 **Arquitectura:** FastAPI (`api`) + worker Python + Redis (cola/caché en caliente,
 TTL 600s) + Postgres (historial de búsquedas y logs estructurados, vía SQLAlchemy)
 + frontend Vite/React, orquestado con Docker Compose.
 
-**Rama activa:** `feature/source-adapters` (creada desde `feature/db-search-history-logging`,
+**Hito 1 (2026-09-28):** todo el trabajo descrito aquí quedó integrado en
+`main` (fast-forward desde `feature/source-adapters`) — es la versión que el
+usuario definió como hito 1 de la plataforma. Las ramas de trabajo nuevas
+deberían salir de `main`.
+
+**Historia de ramas:** `feature/source-adapters` (creada desde `feature/db-search-history-logging`,
 para no perder la persistencia en Postgres). Implementa la Fase 1 de
 `INSTRUCCIONES_IA.md` (contratos internos de adaptadores por fuente) y ya
 avanzó a la Fase 2 (fuentes públicas adicionales vía adaptadores: GitHub
@@ -29,8 +34,7 @@ Issues, Hacker News, RSS/Atom y CrossRef, ver más abajo — de la Fase 2
 (sección 5) todavía faltan Web/Jina Reader y V2EX público, en ese orden);
 `feature/db-search-history-logging` a su vez viene de
 `feature/elsevier-scopus-sciencedirect`, que no tenía commits propios (idéntica
-a `main`). **Ninguna de estas ramas está mergeada a `main` todavía** — `main`
-no tiene ni el historial en Postgres ni este archivo.
+a `main`). Todas quedaron integradas en `main` con el hito 1.
 
 ### Lo que funciona hoy
 - Pipeline de 4 etapas end-to-end vía SSE (`/search`, `/events`, `/job_result`)
@@ -166,10 +170,15 @@ no tiene ni el historial en Postgres ni este archivo.
   `classifying` (visible en `job_logs` y por SSE al frontend) en vez de
   quedar solo en un `print()` a stdout que solo se ve con
   `docker compose logs worker`.
-- **Grafo semántico real**: `infer_topic_relations` le pide al LLM las
-  relaciones entre los tags más frecuentes; si el LLM falla, cae a un grafo de
-  co-ocurrencia (temas que aparecen juntos en el mismo post) como fallback,
-  nunca a reglas fijas.
+- **Grafo semántico (backend, fuera de la UI desde 2026-09-28)**:
+  `infer_topic_relations` le pide al LLM las relaciones entre los tags más
+  frecuentes; si el LLM falla, cae a un grafo de co-ocurrencia (temas que
+  aparecen juntos en el mismo post) como fallback, nunca a reglas fijas. El
+  usuario lo sacó de la vista principal porque no cumplía sus expectativas:
+  el frontend manda `include_graph: false` y el worker ahora respeta ese
+  flag (antes lo ignoraba) y no llama a `build_graph` — ahorra una llamada
+  al LLM por búsqueda (`graph: null` en el resultado). `GraphView.tsx` sigue
+  en el repo sin usar.
 - **El pipeline es resiliente a fallas del LLM (verificado)**: si el gateway
   responde error (ej. API key inválida/revocada, 401), tanto `annotate_posts`
   como `infer_topic_relations` atrapan la excepción (después de los 3
@@ -187,8 +196,11 @@ no tiene ni el historial en Postgres ni este archivo.
   `done` con datos degradados; payload corrupto inyectado directo en Redis →
   job `error` con `error_message` y log `level=ERROR` en `job_logs`.
 - Deduplicación de posts por URL en `worker/main.py`.
-- Frontend con tabla de resultados, nube de palabras (ponderada por
-  `relevance_score`) y grafo, con estilos de marca UNAB aplicados. **Sin
+- Frontend con tabla de resultados y nube de palabras (ponderada por
+  `relevance_score`), con estilos de marca UNAB aplicados. **Sin selector de
+  cantidad** (2026-09-28): se eliminó el slider "Máx. resultados"; cada
+  búsqueda pide `MAX_RESULTS = 10` (constante en `App.tsx`), y el default de
+  `max_results` en la API y el worker también bajó de 30 a 10. **Sin
   selector de fuentes**: se eliminó el checkbox manual (`AVAILABLE_SOURCES`/
   `SOURCE_ICONS` en `App.tsx`) — el frontend siempre manda todas las fuentes
   implementadas (constante `SOURCES` en `App.tsx`, hoy `["stackoverflow",
@@ -246,8 +258,12 @@ no tiene ni el historial en Postgres ni este archivo.
 ### Lo que está a medias o pendiente
 - No hay normalización de texto (solo dedupe por URL y limpieza de HTML).
 - Sin embeddings ni vector store.
-- Nube de palabras y grafo no tienen interacción (hover/click) ni filtros
-  coordinados con el listado — cada visualización es independiente.
+- La nube de palabras no tiene interacción (hover/click) ni filtros
+  coordinados con el listado.
+- El frontend en Docker es un build estático servido por nginx sin
+  `Cache-Control`: tras reconstruir el contenedor el navegador puede seguir
+  mostrando la versión vieja hasta un Ctrl+Shift+R. Pendiente (opcional):
+  `nginx.conf` con `no-cache` para `index.html`.
 - Tests mínimos: solo `worker/tests/test_source_planner.py` (planificador,
   HU-06). Los adaptadores siguen sin tests (`test/snapshot.py` es un
   script de debug, no una suite).
@@ -403,7 +419,8 @@ db/        Paquete compartido (SQLAlchemy): modelos (search_queries, job_logs,
            search_providers) + conexión Postgres + seed de proveedores. Se
            monta por volumen en api/ y worker/ (no se duplica). Conectado
            al pipeline y expuesto por API (HU-05, ver "Lo que funciona hoy").
-frontend/  Vite + React + TS; cytoscape (grafo), d3-cloud (nube).
+frontend/  Vite + React + TS; d3-cloud (nube). cytoscape/GraphView.tsx
+           quedan sin usar (grafo fuera de la UI desde el hito 1).
            App.tsx tiene un toggle "Buscar"/"Historial" en el navbar;
            components/HistoryPanel.tsx consume /providers y /search_history.
 config/llm_config.json   Config del gateway LLM UNAB (openai-compatible, gemma4:e2b)
@@ -432,9 +449,10 @@ INSTRUCCIONES_IA.md      Guía de integración de adaptadores de fuentes (idea t
    por lotes de 8; se descartan los posts marcados `flagged`. Después se
    ordena por `relevance_score` (desc) y se corta a `max_results` — el total
    final es `max_results`, no `max_results` por fuente.
-3. **building** — `build_graph` (relaciones vía LLM + fallback de
-   co-ocurrencia) y `build_wordcloud` (frecuencia ponderada por
-   `relevance_score`).
+3. **building** — `build_wordcloud` (frecuencia ponderada por
+   `relevance_score`) y, solo si `payload.include_graph` es true,
+   `build_graph` (relaciones vía LLM + fallback de co-ocurrencia). El
+   frontend actual manda `include_graph: false`.
 4. **finalize** — resultado completo (`summary`, `wordcloud`, `graph`,
    `posts`) se guarda en Redis (`job:{id}:result`, TTL 600s) y se emite por SSE.
 

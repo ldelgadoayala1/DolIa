@@ -39,7 +39,7 @@ class SearchPayload(BaseModel):
         description="Fuentes a consultar",
         min_length=1,
     )
-    max_results: int = Field(default=30, ge=1, le=200)
+    max_results: int = Field(default=10, ge=1, le=200)
     include_graph: bool = True
     include_wordcloud: bool = True
 

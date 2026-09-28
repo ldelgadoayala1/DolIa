@@ -3,7 +3,6 @@ import { useEffect, useState } from "react";
 import "../css/index.css";
 import "../css/App.css";
 import WordCloud from "./components/WordCloud";
-import GraphView from "./components/GraphView";
 import SearchPipeline from "./components/SearchPipeline";
 import DataTable, { type PostRow } from "./components/DataTable";
 import HistoryPanel from "./components/HistoryPanel";
@@ -11,25 +10,9 @@ import HistoryPanel from "./components/HistoryPanel";
 // ✅ Tipos alineados con lo que devuelve el backend
 type WordItem = { text: string; value: number };
 
-type GraphNode = {
-  id: string;
-  label: string;
-  weight?: number;
-  group?: string;
-};
-
-type GraphEdge = {
-  id?: string;
-  source: string;
-  target: string;
-  weight?: number;
-  relation?: string;
-};
-
 type FinalResult = {
   summary?: string;
   wordcloud?: WordItem[];
-  graph?: { nodes: GraphNode[]; edges: GraphEdge[] };
   posts?: PostRow[];
 };
 
@@ -37,10 +20,12 @@ type FinalResult = {
 // todas, sin selección manual del usuario.
 const SOURCES = ["stackoverflow", "github", "hackernews", "rss", "crossref"];
 
+// Cantidad fija de resultados por búsqueda (sin selector en la UI).
+const MAX_RESULTS = 10;
+
 export default function App() {
   const [query,      setQuery]      = useState<string>("");
-  const [maxResults, setMaxResults] = useState<number>(30);
-  const [jobId,      setJobId]      = useState<string>("");
+  const [jobId,    setJobId]      = useState<string>("");
   const [events,     setEvents]     = useState<any[]>([]);
   const [progress,   setProgress]   = useState<number>(0);
   const [status,     setStatus]     = useState<string>("Listo para buscar.");
@@ -54,8 +39,6 @@ export default function App() {
 
   const apiSearchUrl  = "http://localhost:8000/search";
   const apiEventsBase = "http://localhost:8000/events";
-
-  const rangePct = `${((maxResults - 1) / 199) * 100}%`;
 
   // ── Iniciar búsqueda ──────────────────────────────────────────
   const startSearch = async () => {
@@ -75,8 +58,8 @@ export default function App() {
         body: JSON.stringify({
           query,
           sources:           SOURCES,
-          max_results:       maxResults,
-          include_graph:     true,
+          max_results:       MAX_RESULTS,
+          include_graph:     false,
           include_wordcloud: true,
         }),
       });
@@ -132,25 +115,6 @@ export default function App() {
               })
             );
 
-            const nodes: GraphNode[] = (raw.graph?.nodes ?? []).map(
-              (n: any) => ({
-                id:     String(n.id ?? n.node_id ?? ""),
-                label:  String(n.label ?? n.name ?? n.id ?? ""),
-                weight: Number(n.weight ?? n.frequency ?? 1),
-                group:  String(n.group ?? n.community ?? "0"),
-              })
-            );
-
-            const edges: GraphEdge[] = (raw.graph?.edges ?? []).map(
-              (e: any, i: number) => ({
-                id:       e.id ?? `edge_${i}`,
-                source:   String(e.source ?? e.from ?? ""),
-                target:   String(e.target ?? e.to   ?? ""),
-                weight:   Number(e.weight ?? 1),
-                relation: e.relation ? String(e.relation) : undefined,
-              })
-            );
-
             const posts: PostRow[] = (raw.posts ?? []).map((p: any) => ({
               title: String(p.title ?? "Sin título"),
               url: String(p.url ?? "#"),
@@ -168,7 +132,6 @@ export default function App() {
             setResult({
               summary:   raw.summary ?? "",
               wordcloud,
-              graph: nodes.length > 0 ? { nodes, edges } : undefined,
               posts,
             });
           }
@@ -210,7 +173,6 @@ export default function App() {
 
   // ── Derivados ─────────────────────────────────────────────────
   const wordcloud = result?.wordcloud ?? [];
-  const graph     = result?.graph;
   const isDone    = stage === "finalize" || (progress === 100 && !loading);
   const isError   = hasError;
 
@@ -268,25 +230,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* Max resultados */}
-                <div className="form-group">
-                  <div className="range-header">
-                    <label className="form-label" style={{ margin: 0 }}>
-                      Máx. resultados
-                    </label>
-                    <span className="range-value">{maxResults}</span>
-                  </div>
-                  <input
-                    type="range"
-                    className="form-range"
-                    min={1}
-                    max={200}
-                    value={maxResults}
-                    style={{ "--range-pct": rangePct } as React.CSSProperties}
-                    onChange={(e) => setMaxResults(Number(e.target.value))}
-                  />
-                </div>
-
                 {/* Botón buscar */}
                 <button
                   className="btn-search"
@@ -319,14 +262,6 @@ export default function App() {
                 <section className="result-card">
                   <h2 className="result-card-title">☁️ Nube de Palabras</h2>
                   <WordCloud words={wordcloud} />
-                </section>
-              )}
-
-              {/* ── Grafo ── */}
-              {graph && (
-                <section className="result-card">
-                  <h2 className="result-card-title">🕸️ Grafo de Relaciones</h2>
-                  <GraphView data={graph} />
                 </section>
               )}
 
